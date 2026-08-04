@@ -11,6 +11,9 @@ jobs:
   profiles:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    strategy:
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,21 +41,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 采集组织/用户画像
+      - name: 采集组织/用户画像（片 ${{ matrix.shard }}/4）
         run: |
           python crawl_hf_profiles.py \
             --list-file modelscope_output/hf_models_all.jsonl \
-            --workers 8
+            --workers 8 \
+            --shards 4 \
+            --shard ${{ matrix.shard }}
         env:
           HF_BASE: https://huggingface.co
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: hf-profiles
+          name: hf-profiles-shard${{ matrix.shard }}
           path: |
-            modelscope_output/hf_org_profiles.jsonl
-            modelscope_output/hf_user_profiles.jsonl
-            modelscope_output/hf_owner_index.csv
-            modelscope_output/state_hf_profiles.json
+            modelscope_output/hf_org_profiles_${{ matrix.shard }}.jsonl
+            modelscope_output/hf_user_profiles_${{ matrix.shard }}.jsonl
+            modelscope_output/hf_owner_index_${{ matrix.shard }}.csv
+            modelscope_output/state_hf_profiles_${{ matrix.shard }}.json
           retention-days: 30

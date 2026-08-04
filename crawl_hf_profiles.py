@@ -189,6 +189,8 @@ def main():
     parser = argparse.ArgumentParser(description="HuggingFace 组织/用户画像采集")
     parser.add_argument("--list-file", required=True, help="全量清单 jsonl 或 owner 列表 txt")
     parser.add_argument("--workers", type=int, default=1, help="并发数（默认 1，低调防限流）")
+    parser.add_argument("--shard", type=int, default=0, help="分片索引（0-based）")
+    parser.add_argument("--shards", type=int, default=1, help="总片数")
     parser.add_argument("--limit", type=int, default=None, help="最多处理 N 个 owner（调试用）")
     parser.add_argument("--out-dir", type=str, default=None, help="输出目录（默认 HF_OUTPUT_DIR 或 modelscope_output）")
     args = parser.parse_args()
@@ -197,16 +199,24 @@ def main():
         global OUTPUT_DIR, ORG_FILE, USER_FILE, INDEX_FILE, STATE_FILE
         OUTPUT_DIR = Path(args.out_dir)
         OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
-        ORG_FILE = OUTPUT_DIR / "hf_org_profiles.jsonl"
-        USER_FILE = OUTPUT_DIR / "hf_user_profiles.jsonl"
-        INDEX_FILE = OUTPUT_DIR / "hf_owner_index.csv"
-        STATE_FILE = OUTPUT_DIR / "state_hf_profiles.json"
+        suf = f"_{args.shard}" if args.shards > 1 else ""
+        ORG_FILE = OUTPUT_DIR / f"hf_org_profiles{suf}.jsonl"
+        USER_FILE = OUTPUT_DIR / f"hf_user_profiles{suf}.jsonl"
+        INDEX_FILE = OUTPUT_DIR / f"hf_owner_index{suf}.csv"
+        STATE_FILE = OUTPUT_DIR / f"state_hf_profiles{suf}.json"
 
     list_path = Path(args.list_file)
-    owners = extract_owners(list_path)
+    owners_all = extract_owners(list_path)
+    total_all = len(owners_all)
     if args.limit:
-        owners = owners[:args.limit]
-    print(f"[main] 共 {len(owners)} 个唯一 owner")
+        owners = owners_all[:args.limit]
+    else:
+        owners = owners_all
+    # 分片：按 shards 均分
+    if args.shards > 1:
+        per = (total_all + args.shards - 1) // args.shards
+        owners = owners_all[args.shard * per:(args.shard + 1) * per]
+    print(f"[main] 片 {args.shard}/{args.shards}：本片 {len(owners)} 个 owner（全量 {total_all}）")
 
     state = load_state()
     completed = set(state.get("completed", []))
