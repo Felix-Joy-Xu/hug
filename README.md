@@ -10,6 +10,7 @@
 | `02_update_match.yml` | 更新跨平台匹配表（依赖 01 的产物） | workflow_dispatch |
 | `03_crawl_hf_subset.yml` | HF 子集行为数据（commits/discussions/README/tree） | workflow_dispatch |
 | `04_crawl_hf_governance.yml` | HF 治理文档 | workflow_dispatch |
+| `05_crawl_hf_profiles.yml` | HF 组织/用户画像（依赖 01 的模型清单） | workflow_dispatch |
 | `hf_counterpart.yml` | HF ↔ 魔搭对照采集（每日定时） | workflow_dispatch + schedule |
 
 ## 使用

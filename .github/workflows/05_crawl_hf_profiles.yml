@@ -1,0 +1,58 @@
+name: 05 - HF 组织/用户画像
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests
+
+      - name: 下载 HF 全量清单（models 的 owner 列表来源）
+        run: |
+          set -e
+          RUN_ID=$(gh run list --repo ${{ github.repository }} \
+            --workflow 01_crawl_hf_full.yml \
+            --branch main \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion == "success")][0].databaseId')
+          echo "01 run id: $RUN_ID"
+          gh run download "$RUN_ID" --repo ${{ github.repository }} \
+            --name hf-models-full \
+            --dir modelscope_output
+          if [ -d modelscope_output/hf-models-full ]; then
+            mv modelscope_output/hf-models-full/* modelscope_output/
+            rm -rf modelscope_output/hf-models-full
+          fi
+          ls -lh modelscope_output/hf_models_all.jsonl
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 采集组织/用户画像
+        run: |
+          python crawl_hf_profiles.py \
+            --list-file modelscope_output/hf_models_all.jsonl \
+            --workers 1
+        env:
+          HF_BASE: https://huggingface.co
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hf-profiles
+          path: |
+            modelscope_output/hf_org_profiles.jsonl
+            modelscope_output/hf_user_profiles.jsonl
+            modelscope_output/hf_owner_index.csv
+            modelscope_output/state_hf_profiles.json
+          retention-days: 30
