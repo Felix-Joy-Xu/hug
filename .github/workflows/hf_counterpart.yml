@@ -1,0 +1,65 @@
+name: HF 对照采集
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 18 * * *"   # UTC 18:41 = 北京时间 02:41，错开评论爬虫
+
+permissions:
+  contents: write
+
+jobs:
+  crawl-hf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: pip install requests
+
+      # 复用评论爬虫的缓存拿 models_all.json（只取不存）
+      - uses: actions/cache/restore@v4
+        with:
+          path: modelscope_output
+          key: ms-hf-${{ github.run_id }}
+          restore-keys: |
+            ms-comments-
+            ms-hf-
+
+      # 缓存也取不到时退回种子
+      - name: 种子兜底
+        run: |
+          if [ ! -f modelscope_output/models_all.json ]; then
+            tar -xzf seed/modelscope_seed.tar.gz
+          fi
+          ls -lh modelscope_output/models_all.json
+
+      - name: 采集 HF 对照数据
+        env:
+          HF_BASE: https://huggingface.co
+        run: python crawl_hf_counterpart.py
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-cross-snapshot
+          path: |
+            modelscope_output/cross_platform_match.json
+            modelscope_output/cross_platform_match.csv
+            modelscope_output/hf_metadata.json
+            modelscope_output/hf_cards/
+          retention-days: 30
+
+      # 把对照表回写仓库 → 时间序列在 git 历史里
+      - name: 回写对照表
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f modelscope_output/cross_platform_match.csv
+          git diff --cached --quiet || git commit -m "data: HF 对照快照 $(date -u +%F)"
+          git push

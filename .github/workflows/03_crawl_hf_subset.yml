@@ -1,0 +1,74 @@
+name: 03 - HF 子集行为数据
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests huggingface_hub
+
+      - name: 下载 HF 全量清单
+        run: |
+          set -e
+          RUN_ID=$(gh run list --repo ${{ github.repository }} \
+            --workflow 01_crawl_hf_full.yml \
+            --branch main \
+            --json databaseId,conclusion \
+            --jq '.[0] | select(.conclusion == "success") | .databaseId')
+          echo "01 run id: $RUN_ID"
+          gh run download "$RUN_ID" --repo ${{ github.repository }} \
+            --name hf-models-full \
+            --dir modelscope_output
+          # 展平 artifact 子目录
+          if [ -d modelscope_output/hf-models-full ]; then
+            mv modelscope_output/hf-models-full/* modelscope_output/
+            rm -rf modelscope_output/hf-models-full
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 采集 HF 子集行为数据
+        run: |
+          python crawl_hf_subset.py --total 200 --workers 4
+        env:
+          HF_BASE: https://huggingface.co
+
+      - name: 生成进度报告
+        if: always()
+        run: |
+          echo "# 03 - HF 子集行为数据" > report-03.md
+          echo "" >> report-03.md
+          echo "运行时间: $(date -u +%F' '%T' UTC')" >> report-03.md
+          echo "" >> report-03.md
+          for f in modelscope_output/hf_commit_history.jsonl modelscope_output/hf_comments_all.jsonl modelscope_output/hf_model_dependencies.jsonl; do
+            if [ -f "$f" ]; then
+              wc -l "$f" >> report-03.md
+              ls -lh "$f" >> report-03.md
+            fi
+          done
+          echo "" >> report-03.md
+          echo "model_cards: $(find modelscope_output/hf_model_cards -type f 2>/dev/null | wc -l) 个" >> report-03.md
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hf-subset-behavior
+          path: |
+            modelscope_output/hf_commit_history.jsonl
+            modelscope_output/hf_comments_all.jsonl
+            modelscope_output/hf_model_dependencies.jsonl
+            modelscope_output/hf_model_cards/
+            modelscope_output/state_hf_subset.json
+            report-03.md
+          retention-days: 30

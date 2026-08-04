@@ -1,0 +1,63 @@
+name: 02 - 更新跨平台匹配表
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  match:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests
+
+      - name: 下载 HF 全量清单
+        run: |
+          set -e
+          RUN_ID=$(gh run list --repo ${{ github.repository }} \
+            --workflow 01_crawl_hf_full.yml \
+            --branch main \
+            --json databaseId,conclusion \
+            --jq '.[0] | select(.conclusion == "success") | .databaseId')
+          echo "01 run id: $RUN_ID"
+          gh run download "$RUN_ID" --repo ${{ github.repository }} \
+            --name hf-models-full \
+            --dir modelscope_output
+          # 展平 artifact 子目录
+          if [ -d modelscope_output/hf-models-full ]; then
+            mv modelscope_output/hf-models-full/* modelscope_output/
+            rm -rf modelscope_output/hf-models-full
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: modelscope_output
+          key: hf-full-${{ github.run_id }}
+          restore-keys: hf-full-
+
+      - name: seed 兜底
+        run: |
+          if [ ! -f modelscope_output/hf_models_all.jsonl ]; then
+            tar -xzf seed/modelscope_seed.tar.gz || true
+          fi
+          ls -lh modelscope_output/hf_models_all.jsonl || true
+          ls -lh modelscope_output/models_all.json || true
+
+      - run: python update_cross_platform_match.py --matched-only --skip-fuzzy --workers 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cross-platform-match
+          path: |
+            modelscope_output/cross_platform_match_full.json
+            modelscope_output/cross_platform_match_full.csv
+          retention-days: 30

@@ -1,0 +1,136 @@
+name: 01 - HF 全量清单
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests
+      - uses: actions/cache@v4
+        with:
+          path: modelscope_output
+          key: hf-full
+          restore-keys: hf-full
+      - run: |
+          if [ ! -f modelscope_output/hf_models_all.jsonl ]; then
+            tar -xzf seed/modelscope_seed.tar.gz || true
+          fi
+      - run: python crawl_hf_full.py models
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hf-models-full
+          path: |
+            modelscope_output/hf_models_all.*
+            modelscope_output/state_hf_models.json
+          retention-days: 30
+      - name: 生成进度报告
+        if: always()
+        run: |
+          echo "# 01 - HF 全量清单" > report-01.md
+          echo "" >> report-01.md
+          echo "运行时间: $(date -u +%F' '%T' UTC')" >> report-01.md
+          echo "" >> report-01.md
+          echo "## 输出文件" >> report-01.md
+          ls -lh modelscope_output/hf_models_all.* 2>/dev/null >> report-01.md || echo "无输出" >> report-01.md
+          echo "" >> report-01.md
+          wc -l modelscope_output/hf_models_all.jsonl 2>/dev/null >> report-01.md || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-01-models
+          path: report-01.md
+          retention-days: 30
+
+  datasets:
+    runs-on: ubuntu-latest
+    needs: models
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests
+      - uses: actions/cache@v4
+        with:
+          path: modelscope_output
+          key: hf-full
+          restore-keys: hf-full
+      - run: python crawl_hf_full.py datasets
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hf-datasets-full
+          path: |
+            modelscope_output/hf_datasets_all.*
+            modelscope_output/state_hf_datasets.json
+          retention-days: 30
+      - name: 生成进度报告
+        if: always()
+        run: |
+          echo "# 01 - HF 全量清单 (datasets)" > report-01-datasets.md
+          echo "" >> report-01-datasets.md
+          echo "运行时间: $(date -u +%F' '%T' UTC')" >> report-01-datasets.md
+          echo "" >> report-01-datasets.md
+          ls -lh modelscope_output/hf_datasets_all.* 2>/dev/null >> report-01-datasets.md || echo "无输出" >> report-01-datasets.md
+          echo "" >> report-01-datasets.md
+          wc -l modelscope_output/hf_datasets_all.jsonl 2>/dev/null >> report-01-datasets.md || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-01-datasets
+          path: report-01-datasets.md
+          retention-days: 30
+
+  spaces:
+    runs-on: ubuntu-latest
+    needs: datasets
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests
+      - uses: actions/cache@v4
+        with:
+          path: modelscope_output
+          key: hf-full
+          restore-keys: hf-full
+      - run: python crawl_hf_full.py spaces
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hf-spaces-full
+          path: |
+            modelscope_output/hf_studios_all.*
+            modelscope_output/state_hf_spaces.json
+          retention-days: 30
+      - name: 生成进度报告
+        if: always()
+        run: |
+          echo "# 01 - HF 全量清单 (spaces)" > report-01-spaces.md
+          echo "" >> report-01-spaces.md
+          echo "运行时间: $(date -u +%F' '%T' UTC')" >> report-01-spaces.md
+          echo "" >> report-01-spaces.md
+          ls -lh modelscope_output/hf_studios_all.* 2>/dev/null >> report-01-spaces.md || echo "无输出" >> report-01-spaces.md
+          echo "" >> report-01-spaces.md
+          wc -l modelscope_output/hf_studios_all.jsonl 2>/dev/null >> report-01-spaces.md || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-01-spaces
+          path: report-01-spaces.md
+          retention-days: 30
