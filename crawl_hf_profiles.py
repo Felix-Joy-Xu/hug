@@ -25,7 +25,9 @@ import csv
 import json
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import quote
 
@@ -50,7 +52,8 @@ HEADERS = {
 }
 
 REQUEST_DELAY = 0.3
-SAVE_EVERY = 100
+SAVE_EVERY = 200
+WRITE_LOCK = threading.Lock()
 
 ORG_FILE = OUTPUT_DIR / "hf_org_profiles.jsonl"
 USER_FILE = OUTPUT_DIR / "hf_user_profiles.jsonl"
@@ -223,40 +226,44 @@ def main():
     if not index_exists:
         writer.writeheader()
 
-    done = 0
-    for owner in todo:
+    def process(owner):
+        """抓单个 owner；返回 (owner, record, owner_type) 或 (owner, None, err)。"""
         try:
             record, owner_type = fetch_profile(session, owner)
         except Exception as e:
-            record, owner_type = None, f"err:{type(e).__name__}"
+            return owner, None, f"err:{type(e).__name__}"
+        return owner, record, owner_type
 
-        if record:
-            if owner_type == "org":
-                append_jsonl(ORG_FILE, record)
+    done = 0
+    workers = max(1, args.workers)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for owner, record, owner_type in pool.map(process, todo):
+            if record:
+                if owner_type == "org":
+                    append_jsonl(ORG_FILE, record)
+                else:
+                    append_jsonl(USER_FILE, record)
+                append_index(writer, record)
+                if owner_type == "org":
+                    state["orgs"] += 1
+                else:
+                    state["users"] += 1
             else:
-                append_jsonl(USER_FILE, record)
-            append_index(writer, record)
-            if owner_type == "org":
-                state["orgs"] += 1
-            else:
-                state["users"] += 1
-        else:
-            state["errors"] += 1
-            if state["errors"] <= 20:
-                print(f"  [{owner}] 抓取失败: {owner_type}")
+                state["errors"] += 1
+                if state["errors"] <= 20:
+                    print(f"  [{owner}] 抓取失败: {owner_type}")
 
-        completed.add(owner)
-        state["completed"] = sorted(completed)
-        state["count"] = len(completed)
-        done += 1
+            completed.add(owner)
+            state["completed"] = sorted(completed)
+            state["count"] = len(completed)
+            done += 1
 
-        if done % SAVE_EVERY == 0:
-            index_f.flush()
-            save_state(state)
-            print(f"[progress] 本运行 +{done}，累计 {len(completed)}/{len(owners)} "
-                  f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})")
-
-        time.sleep(REQUEST_DELAY)
+            if done % SAVE_EVERY == 0:
+                with WRITE_LOCK:
+                    index_f.flush()
+                    save_state(state)
+                print(f"[progress] +{done}，累计 {len(completed)}/{len(owners)} "
+                      f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})")
 
     index_f.flush()
     index_f.close()

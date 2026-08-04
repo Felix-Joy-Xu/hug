@@ -42,7 +42,7 @@ jobs:
         run: |
           python crawl_hf_profiles.py \
             --list-file modelscope_output/hf_models_all.jsonl \
-            --workers 1
+            --workers 8
         env:
           HF_BASE: https://huggingface.co
 
