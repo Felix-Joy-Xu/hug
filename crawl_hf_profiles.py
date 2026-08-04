@@ -90,25 +90,23 @@ def save_state(state: dict):
 def extract_owners(list_file: Path) -> list:
     """从全量清单 jsonl（每行含 author/Owner）或 txt（每行一个 owner）提取去重 owner。"""
     owners = set()
-    text = list_file.read_text(encoding="utf-8", errors="ignore")
-    if list_file.suffix.lower() == ".jsonl":
-        for line in text.splitlines():
+    is_jsonl = list_file.suffix.lower() == ".jsonl"
+    with open(list_file, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
             line = line.strip()
             if not line:
                 continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            # 兼容新格式（raw）与旧格式（_raw.author）
-            author = rec.get("author") or rec.get("Owner") or (rec.get("_raw") or {}).get("author")
+            if is_jsonl:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # 兼容新格式（raw）与旧格式（_raw.author）
+                author = rec.get("author") or rec.get("Owner") or (rec.get("_raw") or {}).get("author")
+            else:
+                author = line
             if author:
                 owners.add(str(author).strip())
-    else:
-        for line in text.splitlines():
-            line = line.strip()
-            if line:
-                owners.add(line)
     return sorted(owners)
 
 
