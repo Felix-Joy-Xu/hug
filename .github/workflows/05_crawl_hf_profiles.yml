@@ -59,7 +59,8 @@ jobs:
             --shard ${{ matrix.shard }}
         env:
           HF_BASE: https://huggingface.co
-          HF_TOKENS: ${{ secrets.HF_TOKEN_${{ matrix.shard }} }}
+          HF_TOKENS: ${{ secrets.HF_TOKENS }}
+          HF_TOKEN_INDEX: ${{ matrix.shard }}
 
       - name: 回写断点与数据到仓库（多轮续跑）
         if: always()

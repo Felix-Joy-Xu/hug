@@ -50,9 +50,13 @@ HEADERS = {
                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Accept": "application/json",
 }
-# 多 token 轮询：HF_TOKENS 逗号分隔；兼容 HF_TOKEN 单 token
+# 多 token 轮询：HF_TOKENS 逗号分隔；HF_TOKEN_INDEX 指定固定用第 N 个（每 job 专用一个）
 HF_TOKENS = [t.strip() for t in os.environ.get("HF_TOKENS", os.environ.get("HF_TOKEN", "")).split(",") if t.strip()]
-if HF_TOKENS:
+HF_TOKEN_INDEX = int(os.environ.get("HF_TOKEN_INDEX", "-1"))
+if HF_TOKEN_INDEX >= 0 and HF_TOKEN_INDEX < len(HF_TOKENS):
+    HF_TOKENS = [HF_TOKENS[HF_TOKEN_INDEX]]  # 只用一个指定 token
+    print(f"[config] 使用第 {HF_TOKEN_INDEX} 个 HF token（专用配额 200/min）", flush=True)
+elif HF_TOKENS:
     print(f"[config] 使用 {len(HF_TOKENS)} 个 HF token 轮询（总配额 {len(HF_TOKENS)*200}/min 左右）", flush=True)
 else:
     print("[config] 未提供 HF token，使用匿名访问（限流较严）", flush=True)
