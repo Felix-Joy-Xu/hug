@@ -5,7 +5,7 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 jobs:
   profiles:
@@ -13,13 +13,22 @@ jobs:
     timeout-minutes: 360
     strategy:
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - run: pip install requests
+
+      - name: 恢复上次断点（仓库里）
+        run: |
+          mkdir -p modelscope_output
+          if [ -f modelscope_output/state_hf_profiles_${{ matrix.shard }}.json ]; then
+            echo "恢复断点，继续上次采集"
+          else
+            echo "首次运行（或断点缺失），全新采集"
+          fi
 
       - name: 下载 HF 全量清单（models 的 owner 列表来源）
         run: |
@@ -41,16 +50,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 采集组织/用户画像（片 ${{ matrix.shard }}/4）
+      - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5，专用 token）
         run: |
           python crawl_hf_profiles.py \
             --list-file modelscope_output/hf_models_all.jsonl \
-            --workers 16 \
-            --shards 4 \
+            --workers 8 \
+            --shards 5 \
             --shard ${{ matrix.shard }}
         env:
           HF_BASE: https://huggingface.co
-          HF_TOKENS: ${{ secrets.HF_TOKENS }}
+          HF_TOKENS: ${{ secrets.HF_TOKEN_${{ matrix.shard }} }}
+
+      - name: 回写断点与数据到仓库（多轮续跑）
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f modelscope_output/hf_org_profiles_${{ matrix.shard }}.jsonl \
+                     modelscope_output/hf_user_profiles_${{ matrix.shard }}.jsonl \
+                     modelscope_output/hf_owner_index_${{ matrix.shard }}.csv \
+                     modelscope_output/state_hf_profiles_${{ matrix.shard }}.json
+          git diff --cached --quiet || git commit -m "data: HF 画像 shard${{ matrix.shard }} 进度 $(date -u +%F-%H)"
+          git pull --rebase origin main || true
+          git push || echo "::warning::推送失败，下次运行重试"
 
       - uses: actions/upload-artifact@v4
         if: always()

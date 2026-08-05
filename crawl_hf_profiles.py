@@ -234,15 +234,15 @@ def main():
     if args.shards > 1:
         per = (total_all + args.shards - 1) // args.shards
         owners = owners_all[args.shard * per:(args.shard + 1) * per]
-    print(f"[main] 片 {args.shard}/{args.shards}：本片 {len(owners)} 个 owner（全量 {total_all}）")
+    print(f"[main] 片 {args.shard}/{args.shards}：本片 {len(owners)} 个 owner（全量 {total_all}）", flush=True)
 
     state = load_state()
     completed = set(state.get("completed", []))
     todo = [o for o in owners if o not in completed]
-    print(f"[main] 已完成 {len(completed)}，待采集 {len(todo)}")
+    print(f"[main] 已完成 {len(completed)}，待采集 {len(todo)}", flush=True)
 
     if not todo:
-        print("[main] 全部完成")
+        print("[main] 全部完成", flush=True)
         return
 
     session = requests.Session()
@@ -279,7 +279,7 @@ def main():
             else:
                 state["errors"] += 1
                 if state["errors"] <= 20:
-                    print(f"  [{owner}] 抓取失败: {owner_type}")
+                    print(f"  [{owner}] 抓取失败: {owner_type}", flush=True)
 
             completed.add(owner)
             state["completed"] = sorted(completed)
@@ -291,16 +291,16 @@ def main():
                     index_f.flush()
                     save_state(state)
                 print(f"[progress] +{done}，累计 {len(completed)}/{len(owners)} "
-                      f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})")
+                      f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})", flush=True)
 
     index_f.flush()
     index_f.close()
     save_state(state)
     print(f"[done] 累计 {len(completed)}/{len(owners)} "
-          f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})")
-    print(f"  组织画像: {ORG_FILE}")
-    print(f"  个人画像: {USER_FILE}")
-    print(f"  owner 汇总: {INDEX_FILE}")
+          f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})", flush=True)
+    print(f"  组织画像: {ORG_FILE}", flush=True)
+    print(f"  个人画像: {USER_FILE}", flush=True)
+    print(f"  owner 汇总: {INDEX_FILE}", flush=True)
 
 
 if __name__ == "__main__":
