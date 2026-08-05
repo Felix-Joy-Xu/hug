@@ -50,6 +50,12 @@ HEADERS = {
                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Accept": "application/json",
 }
+# 多 token 轮询：HF_TOKENS 逗号分隔；兼容 HF_TOKEN 单 token
+HF_TOKENS = [t.strip() for t in os.environ.get("HF_TOKENS", os.environ.get("HF_TOKEN", "")).split(",") if t.strip()]
+if HF_TOKENS:
+    print(f"[config] 使用 {len(HF_TOKENS)} 个 HF token 轮询（总配额 {len(HF_TOKENS)*200}/min 左右）", flush=True)
+else:
+    print("[config] 未提供 HF token，使用匿名访问（限流较严）", flush=True)
 
 REQUEST_DELAY = 0.3
 SAVE_EVERY = 200
@@ -113,10 +119,22 @@ def extract_owners(list_file: Path) -> list:
     return sorted(owners)
 
 
+def _get_token():
+    """轮询返回下一个 token；无 token 返回 None。"""
+    if not HF_TOKENS:
+        return None
+    idx = int(time.time() * 100) % len(HF_TOKENS)
+    return HF_TOKENS[idx]
+
+
 def fetch_json(session, url, retries=4):
     for attempt in range(retries):
         try:
-            r = session.get(url, timeout=30)
+            headers = dict(session.headers)
+            tok = _get_token()
+            if tok:
+                headers["Authorization"] = f"Bearer {tok}"
+            r = session.get(url, headers=headers, timeout=30)
             if r.status_code in (429, 503):
                 time.sleep(min(2 ** attempt * 3, 30))
                 continue
