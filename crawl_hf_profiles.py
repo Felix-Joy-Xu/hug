@@ -113,6 +113,7 @@ def checkpoint_commit(state: dict, total: int, started_ts: float):
     try:
         import subprocess
         git = "git"
+        cwd = str(BASE_DIR)
         report = write_progress_report(state, total, started_ts)
         shard_suffix = f"_{_shard}" if _shards > 1 else ""
         files = [
@@ -122,16 +123,24 @@ def checkpoint_commit(state: dict, total: int, started_ts: float):
             str(OUTPUT_DIR / f"state_hf_profiles{shard_suffix}.json"),
             str(report),
         ]
-        subprocess.run([git, "add", "-f"] + files, check=False, capture_output=True)
-        subprocess.run([git, "config", "user.name", "github-actions[bot]"], check=False, capture_output=True)
-        subprocess.run([git, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=False, capture_output=True)
+        # 只 add 已存在的文件（git add 遇缺失文件会整体失败）
+        files = [f for f in files if os.path.exists(f)]
+        subprocess.run([git, "add", "-f"] + files, check=False, capture_output=True, cwd=cwd)
+        subprocess.run([git, "config", "user.name", "github-actions[bot]"], check=False, capture_output=True, cwd=cwd)
+        subprocess.run([git, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=False, capture_output=True, cwd=cwd)
+        done = state.get("count", 0)
         r = subprocess.run([git, "commit", "-m",
                             f"data: HF 画像进度 shard{_shard} {done}/{total} {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"],
-                           check=False, capture_output=True)
+                           check=False, capture_output=True, cwd=cwd)
         if r.returncode == 0:
-            subprocess.run([git, "pull", "--rebase", "origin", "main"], check=False, capture_output=True)
-            p = subprocess.run([git, "push", "origin", "main"], check=False, capture_output=True)
-            print(f"[checkpoint] 进度已提交并推送（{done}/{total}）", flush=True)
+            subprocess.run([git, "pull", "--rebase", "origin", "main"], check=False, capture_output=True, cwd=cwd)
+            p = subprocess.run([git, "push", "origin", "main"], check=False, capture_output=True, cwd=cwd)
+            if p.returncode == 0:
+                print(f"[checkpoint] 进度已提交并推送（{done}/{total}）", flush=True)
+            else:
+                print(f"[checkpoint] push 失败: {p.stderr.decode(errors='replace')[:120]}", flush=True)
+        else:
+            print(f"[checkpoint] commit 失败: {r.stderr.decode(errors='replace')[:120]}", flush=True)
     except Exception as e:
         print(f"[checkpoint] 回写失败: {str(e)[:80]}", flush=True)
 
