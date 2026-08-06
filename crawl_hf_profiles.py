@@ -71,33 +71,71 @@ _last_commit_count = [0]
 _last_checkpoint_ts = [0.0]
 
 
-def write_progress_report(state: dict, total: int, started_ts: float):
-    """生成自然语言可读的进度报告 markdown。"""
-    done = state.get("count", 0)
-    pct = done / total * 100 if total else 0
+def load_shard_state(shard: int, out_dir=None) -> dict:
+    """读取指定 shard 的 state 文件（不存在返回空）。"""
+    d = Path(out_dir) if out_dir else OUTPUT_DIR
+    sf = d / f"state_hf_profiles_{shard}.json"
+    if not sf.exists():
+        return {}
+    try:
+        with open(sf, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def write_progress_report(shards: int, started_ts: float, out_dir=None):
+    """生成单一汇总进度报告 PROGRESS.md（读全部 shard 的 state）。"""
+    d = Path(out_dir) if out_dir else OUTPUT_DIR
+    report = d / "PROGRESS.md"
+    states = []
+    totals = []
+    for i in range(shards):
+        s = load_shard_state(i, out_dir=out_dir)
+        states.append(s)
+        totals.append(s.get("total", 0) if s else 0)
+    done_total = sum(s.get("count", 0) for s in states)
+    org_total = sum(s.get("orgs", 0) for s in states)
+    user_total = sum(s.get("users", 0) for s in states)
+    err_total = sum(s.get("errors", 0) for s in states)
+    all_total = sum(totals)
+    pct = done_total / all_total * 100 if all_total else 0
     elapsed = time.time() - started_ts
-    rate = done / (elapsed / 60) if elapsed > 0 else 0  # 条/分钟
-    remain = (total - done) / rate if rate > 0 else 0   # 剩余分钟
-    shard_suffix = f"_{_shard}" if _shards > 1 else ""
-    report = OUTPUT_DIR / f"PROGRESS_shard{shard_suffix}.md"
+    rate = done_total / (elapsed / 60) if elapsed > 0 else 0
+    remain = (all_total - done_total) / rate if rate > 0 else 0
+
     lines = [
         "# HuggingFace 组织/用户画像采集进度",
         "",
         f"- **更新时间**: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC",
-        f"- **分片**: {_shard}/{_shards}",
-        f"- **进度**: {done:,} / {total:,} 个 owner（{pct:.1f}%）",
-        f"- **组织数**: {state.get('orgs', 0):,}",
-        f"- **个人用户数**: {state.get('users', 0):,}",
-        f"- **失败数**: {state.get('errors', 0):,}",
+        f"- **分片数**: {shards}",
+        f"- **总体进度**: {done_total:,} / {all_total:,} 个 owner（{pct:.1f}%）",
+        f"- **组织数**: {org_total:,}",
+        f"- **个人用户数**: {user_total:,}",
+        f"- **失败数**: {err_total:,}",
         f"- **采集速率**: {rate:.0f} 个/分钟",
         f"- **已运行**: {elapsed/3600:.1f} 小时",
         f"- **预计剩余**: {remain/60:.1f} 小时",
         "",
-        "## 已采集",
+        "## 各分片进度",
         "",
-        f"- 组织画像: {ORG_FILE.name}（{(ORG_FILE.stat().st_size/1024/1024) if ORG_FILE.exists() else 0:.1f} MB）",
-        f"- 个人画像: {USER_FILE.name}（{(USER_FILE.stat().st_size/1024/1024) if USER_FILE.exists() else 0:.1f} MB）",
-        f"- owner 汇总: {INDEX_FILE.name}",
+    ]
+    for i in range(shards):
+        s = states[i]
+        if not s:
+            lines.append(f"- 分片 {i}: 尚未开始")
+            continue
+        t = totals[i]
+        p = s.get("count", 0) / t * 100 if t else 0
+        lines.append(f"- 分片 {i}: {s.get('count', 0):,} / {t:,}（{p:.1f}%），"
+                     f"orgs={s.get('orgs', 0):,}，users={s.get('users', 0):,}，err={s.get('errors', 0):,}")
+    lines += [
+        "",
+        "## 数据文件（全部在 modelscope_output/ 下）",
+        "",
+        "- `hf_org_profiles_{N}.jsonl`：各分片组织画像",
+        "- `hf_user_profiles_{N}.jsonl`：各分片个人画像",
+        "- `hf_owner_index_{N}.csv`：各分片 owner 汇总",
         "",
         "> 本报告由爬虫每 30 分钟自动生成并提交。",
     ]
@@ -107,21 +145,21 @@ def write_progress_report(state: dict, total: int, started_ts: float):
 
 
 def checkpoint_commit(state: dict, total: int, started_ts: float):
-    """GitHub Actions 下定期生成进度报告并回写断点到仓库（数据防丢）。"""
+    """GitHub Actions 下定期生成汇总进度报告并回写断点到仓库（数据防丢）。"""
     if not IS_GITHUB_ACTIONS:
         return
     try:
         import subprocess
         git = "git"
         cwd = str(BASE_DIR)
-        report = write_progress_report(state, total, started_ts)
+        # 先拉取其他 job 已 push 的数据（拿到最新 state）
+        subprocess.run([git, "pull", "--rebase", "origin", "main"], check=False, capture_output=True, cwd=cwd)
         shard_suffix = f"_{_shard}" if _shards > 1 else ""
         files = [
             str(OUTPUT_DIR / f"hf_org_profiles{shard_suffix}.jsonl"),
             str(OUTPUT_DIR / f"hf_user_profiles{shard_suffix}.jsonl"),
             str(OUTPUT_DIR / f"hf_owner_index{shard_suffix}.csv"),
             str(OUTPUT_DIR / f"state_hf_profiles{shard_suffix}.json"),
-            str(report),
         ]
         # 只 add 已存在的文件（git add 遇缺失文件会整体失败）
         files = [f for f in files if os.path.exists(f)]
@@ -132,13 +170,25 @@ def checkpoint_commit(state: dict, total: int, started_ts: float):
         r = subprocess.run([git, "commit", "-m",
                             f"data: HF 画像进度 shard{_shard} {done}/{total} {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"],
                            check=False, capture_output=True, cwd=cwd)
-        if r.returncode == 0:
-            subprocess.run([git, "pull", "--rebase", "origin", "main"], check=False, capture_output=True, cwd=cwd)
-            p = subprocess.run([git, "push", "origin", "main"], check=False, capture_output=True, cwd=cwd)
-            if p.returncode == 0:
-                print(f"[checkpoint] 进度已提交并推送（{done}/{total}）", flush=True)
-            else:
-                print(f"[checkpoint] push 失败: {p.stderr.decode(errors='replace')[:120]}", flush=True)
+        # commit 成功后才汇总生成单一 PROGRESS.md 并提交
+        report = write_progress_report(_shards, started_ts)
+        subprocess.run([git, "add", "-f", str(report)], check=False, capture_output=True, cwd=cwd)
+        r2 = subprocess.run([git, "commit", "-m",
+                             f"docs: 汇总进度报告 {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"],
+                            check=False, capture_output=True, cwd=cwd)
+        if r.returncode == 0 or r2.returncode == 0:
+            # push 失败重试（5 job 并发可能冲突）
+            for attempt in range(3):
+                p = subprocess.run([git, "push", "origin", "main"], check=False, capture_output=True, cwd=cwd)
+                if p.returncode == 0:
+                    print(f"[checkpoint] 进度已提交并推送（{done}/{total}）", flush=True)
+                    return
+                subprocess.run([git, "pull", "--rebase", "origin", "main"], check=False, capture_output=True, cwd=cwd)
+                subprocess.run([git, "add", "-f", str(report)], check=False, capture_output=True, cwd=cwd)
+                subprocess.run([git, "commit", "-m",
+                               f"docs: 汇总进度报告重试 {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"],
+                              check=False, capture_output=True, cwd=cwd)
+            print(f"[checkpoint] push 多次失败: {p.stderr.decode(errors='replace')[:120]}", flush=True)
         else:
             print(f"[checkpoint] commit 失败: {r.stderr.decode(errors='replace')[:120]}", flush=True)
     except Exception as e:
@@ -327,6 +377,7 @@ def main():
     print(f"[main] 片 {args.shard}/{args.shards}：本片 {len(owners)} 个 owner（全量 {total_all}）", flush=True)
 
     state = load_state()
+    state["total"] = len(owners)  # 供汇总进度报告使用
     completed = set(state.get("completed", []))
     todo = [o for o in owners if o not in completed]
     print(f"[main] 已完成 {len(completed)}，待采集 {len(todo)}", flush=True)
