@@ -64,6 +64,37 @@ else:
 REQUEST_DELAY = 0.3
 SAVE_EVERY = 200
 WRITE_LOCK = threading.Lock()
+# 云端定期回写：每处理 COMMIT_EVERY 条就 git push 一次断点到仓库，防超时丢数据
+COMMIT_EVERY = 5000
+IS_GITHUB_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
+_last_commit_count = [0]
+
+
+def checkpoint_commit():
+    """GitHub Actions 下定期回写断点到仓库（数据防丢）。"""
+    if not IS_GITHUB_ACTIONS:
+        return
+    try:
+        import subprocess
+        git = "git"
+        shard_suffix = f"_{_shard}" if _shards > 1 else ""
+        files = [
+            str(OUTPUT_DIR / f"hf_org_profiles{shard_suffix}.jsonl"),
+            str(OUTPUT_DIR / f"hf_user_profiles{shard_suffix}.jsonl"),
+            str(OUTPUT_DIR / f"hf_owner_index{shard_suffix}.csv"),
+            str(OUTPUT_DIR / f"state_hf_profiles{shard_suffix}.json"),
+        ]
+        subprocess.run([git, "add", "-f"] + files, check=False, capture_output=True)
+        subprocess.run([git, "config", "user.name", "github-actions[bot]"], check=False, capture_output=True)
+        subprocess.run([git, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=False, capture_output=True)
+        r = subprocess.run([git, "commit", "-m", f"data: HF 画像断点 shard{_shard} {int(time.time())}"],
+                           check=False, capture_output=True)
+        if r.returncode == 0:
+            subprocess.run([git, "pull", "--rebase", "origin", "main"], check=False, capture_output=True)
+            p = subprocess.run([git, "push", "origin", "main"], check=False, capture_output=True)
+            print(f"[checkpoint] 回写断点成功（{_last_commit_count[0]} 条）", flush=True)
+    except Exception as e:
+        print(f"[checkpoint] 回写失败: {str(e)[:80]}", flush=True)
 
 ORG_FILE = OUTPUT_DIR / "hf_org_profiles.jsonl"
 USER_FILE = OUTPUT_DIR / "hf_user_profiles.jsonl"
@@ -217,6 +248,10 @@ def main():
     parser.add_argument("--out-dir", type=str, default=None, help="输出目录（默认 HF_OUTPUT_DIR 或 modelscope_output）")
     args = parser.parse_args()
 
+    global _shard, _shards
+    _shard = args.shard
+    _shards = args.shards
+
     if args.out_dir:
         global OUTPUT_DIR, ORG_FILE, USER_FILE, INDEX_FILE, STATE_FILE
         OUTPUT_DIR = Path(args.out_dir)
@@ -296,6 +331,11 @@ def main():
                     save_state(state)
                 print(f"[progress] +{done}，累计 {len(completed)}/{len(owners)} "
                       f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})", flush=True)
+
+            # 云端定期回写断点（防超时丢数据）
+            if done - _last_commit_count[0] >= COMMIT_EVERY:
+                _last_commit_count[0] = done
+                checkpoint_commit()
 
     index_f.flush()
     index_f.close()
