@@ -2,6 +2,8 @@ name: 05 - HF 组织/用户画像
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 */3 * * *"   # 每 3 小时自动触发一轮（断点续爬，多轮累计）
 
 permissions:
   actions: read
@@ -50,7 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5，专用 token）
+      - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5，每轮 2 小时主动收尾）
         run: |
           python crawl_hf_profiles.py \
             --list-file modelscope_output/hf_models_all.jsonl \
@@ -61,17 +63,45 @@ jobs:
           HF_BASE: https://huggingface.co
           HF_TOKENS: ${{ secrets.HF_TOKENS }}
           HF_TOKEN_INDEX: ${{ matrix.shard }}
+          MAX_MINUTES: 120
 
-      - name: 回写断点与数据到仓库（多轮续跑）
+      - name: 生成进度报告并回写（脚本已完成，此为兜底）
         if: always()
         run: |
+          cd modelscope_output
+          python - <<'EOF'
+          import json, glob, time
+          shards = 5
+          lines = ["# HuggingFace 组织/用户画像采集进度", "",
+                   f"- **更新时间**: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC",
+                   f"- **分片数**: {shards}", ""]
+          done_total = org_total = user_total = err_total = all_total = 0
+          for i in range(shards):
+              f = f"state_hf_profiles_{i}.json"
+              try:
+                  s = json.load(open(f))
+                  done_total += s.get("count", 0); org_total += s.get("orgs", 0)
+                  user_total += s.get("users", 0); err_total += s.get("errors", 0)
+                  all_total += s.get("total", 0)
+                  lines.append(f"- 分片 {i}: {s.get('count', 0):,} / {s.get('total', 0):,}，orgs={s.get('orgs', 0):,}，users={s.get('users', 0):,}，err={s.get('errors', 0):,}")
+              except Exception:
+                  lines.append(f"- 分片 {i}: 尚未开始")
+          pct = done_total / all_total * 100 if all_total else 0
+          lines[3:3] = [f"- **总体进度**: {done_total:,} / {all_total:,} 个 owner（{pct:.1f}%）",
+                        f"- **组织数**: {org_total:,}", f"- **个人用户数**: {user_total:,}",
+                        f"- **失败数**: {err_total:,}", "", "## 各分片进度", ""]
+          open("PROGRESS.md", "w").write("\n".join(lines) + "\n")
+          print(f"PROGRESS.md 更新: {done_total}/{all_total} ({pct:.1f}%)")
+          EOF
+          cd ..
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f modelscope_output/hf_org_profiles_${{ matrix.shard }}.jsonl \
-                     modelscope_output/hf_user_profiles_${{ matrix.shard }}.jsonl \
-                     modelscope_output/hf_owner_index_${{ matrix.shard }}.csv \
-                     modelscope_output/state_hf_profiles_${{ matrix.shard }}.json
-          git diff --cached --quiet || git commit -m "data: HF 画像 shard${{ matrix.shard }} 进度 $(date -u +%F-%H)"
+          git add -f modelscope_output/state_hf_profiles_*.json \
+                     modelscope_output/hf_org_profiles_*.jsonl \
+                     modelscope_output/hf_user_profiles_*.jsonl \
+                     modelscope_output/hf_owner_index_*.csv \
+                     modelscope_output/PROGRESS.md
+          git diff --cached --quiet || git commit -m "data: HF 画像断点与进度报告 $(date -u +%F-%H)"
           git pull --rebase origin main || true
           git push || echo "::warning::推送失败，下次运行重试"
 

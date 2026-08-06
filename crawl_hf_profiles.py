@@ -395,20 +395,31 @@ def main():
     if not index_exists:
         writer.writeheader()
 
+    done = 0
+    workers = max(1, args.workers)
+    started_ts = time.time()
+    _last_checkpoint_ts[0] = started_ts
+    # 时间上限：到点主动收尾退出（防云端 360 分钟超时取消丢数据）
+    max_minutes = int(os.environ.get("MAX_MINUTES", "0") or 0)
+    time_up = False
+
     def process(owner):
-        """抓单个 owner；返回 (owner, record, owner_type) 或 (owner, None, err)。"""
         try:
             record, owner_type = fetch_profile(session, owner)
         except Exception as e:
             return owner, None, f"err:{type(e).__name__}"
         return owner, record, owner_type
 
-    done = 0
-    workers = max(1, args.workers)
-    started_ts = time.time()
-    _last_checkpoint_ts[0] = started_ts
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for owner, record, owner_type in pool.map(process, todo):
+        futures = [pool.submit(process, o) for o in todo]
+        for fut in as_completed(futures):
+            if time_up:
+                fut.cancel()
+                continue
+            try:
+                owner, record, owner_type = fut.result()
+            except Exception:
+                continue
             if record:
                 if owner_type == "org":
                     append_jsonl(ORG_FILE, record)
@@ -440,6 +451,12 @@ def main():
             if time.time() - _last_checkpoint_ts[0] >= CHECKPOINT_MINUTES * 60:
                 _last_checkpoint_ts[0] = time.time()
                 checkpoint_commit(state, len(owners), started_ts)
+
+            # 时间上限：主动收尾（保存断点并正常退出，job 标记成功）
+            if max_minutes and (time.time() - started_ts) >= max_minutes * 60:
+                time_up = True
+                print(f"[main] 达到时间上限 {max_minutes} 分钟，主动收尾（已处理 {done}）", flush=True)
+                break
 
     index_f.flush()
     index_f.close()
