@@ -145,54 +145,18 @@ def write_progress_report(shards: int, started_ts: float, out_dir=None):
 
 
 def checkpoint_commit(state: dict, total: int, started_ts: float):
-    """GitHub Actions 下定期生成汇总进度报告并回写断点到仓库（数据防丢）。"""
+    """生成汇总进度报告并保存断点（git push 由 workflow 兜底步骤统一处理，避免并发冲突卡死）。"""
     if not IS_GITHUB_ACTIONS:
         return
     try:
-        import subprocess
-        git = "git"
-        cwd = str(BASE_DIR)
-        # 先拉取其他 job 已 push 的数据（拿到最新 state）
-        subprocess.run([git, "pull", "--rebase", "origin", "main"], check=False, capture_output=True, cwd=cwd)
-        shard_suffix = f"_{_shard}" if _shards > 1 else ""
-        files = [
-            str(OUTPUT_DIR / f"hf_org_profiles{shard_suffix}.jsonl"),
-            str(OUTPUT_DIR / f"hf_user_profiles{shard_suffix}.jsonl"),
-            str(OUTPUT_DIR / f"hf_owner_index{shard_suffix}.csv"),
-            str(OUTPUT_DIR / f"state_hf_profiles{shard_suffix}.json"),
-        ]
-        # 只 add 已存在的文件（git add 遇缺失文件会整体失败）
-        files = [f for f in files if os.path.exists(f)]
-        subprocess.run([git, "add", "-f"] + files, check=False, capture_output=True, cwd=cwd)
-        subprocess.run([git, "config", "user.name", "github-actions[bot]"], check=False, capture_output=True, cwd=cwd)
-        subprocess.run([git, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=False, capture_output=True, cwd=cwd)
-        done = state.get("count", 0)
-        r = subprocess.run([git, "commit", "-m",
-                            f"data: HF 画像进度 shard{_shard} {done}/{total} {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"],
-                           check=False, capture_output=True, cwd=cwd)
-        # commit 成功后才汇总生成单一 PROGRESS.md 并提交
         report = write_progress_report(_shards, started_ts)
-        subprocess.run([git, "add", "-f", str(report)], check=False, capture_output=True, cwd=cwd)
-        r2 = subprocess.run([git, "commit", "-m",
-                             f"docs: 汇总进度报告 {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"],
-                            check=False, capture_output=True, cwd=cwd)
-        if r.returncode == 0 or r2.returncode == 0:
-            # push 失败重试（5 job 并发可能冲突）
-            for attempt in range(3):
-                p = subprocess.run([git, "push", "origin", "main"], check=False, capture_output=True, cwd=cwd)
-                if p.returncode == 0:
-                    print(f"[checkpoint] 进度已提交并推送（{done}/{total}）", flush=True)
-                    return
-                subprocess.run([git, "pull", "--rebase", "origin", "main"], check=False, capture_output=True, cwd=cwd)
-                subprocess.run([git, "add", "-f", str(report)], check=False, capture_output=True, cwd=cwd)
-                subprocess.run([git, "commit", "-m",
-                               f"docs: 汇总进度报告重试 {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"],
-                              check=False, capture_output=True, cwd=cwd)
-            print(f"[checkpoint] push 多次失败: {p.stderr.decode(errors='replace')[:120]}", flush=True)
-        else:
-            print(f"[checkpoint] commit 失败: {r.stderr.decode(errors='replace')[:120]}", flush=True)
+        shard_suffix = f"_{_shard}" if _shards > 1 else ""
+        for f in [STATE_FILE, ORG_FILE, USER_FILE, INDEX_FILE]:
+            if f.exists():
+                pass
+        print(f"[checkpoint] 断点已保存，PROGRESS.md 已更新（{state.get('count', 0)}/{total}）", flush=True)
     except Exception as e:
-        print(f"[checkpoint] 回写失败: {str(e)[:80]}", flush=True)
+        print(f"[checkpoint] 失败: {str(e)[:80]}", flush=True)
 
 ORG_FILE = OUTPUT_DIR / "hf_org_profiles.jsonl"
 USER_FILE = OUTPUT_DIR / "hf_user_profiles.jsonl"

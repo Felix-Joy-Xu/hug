@@ -102,8 +102,18 @@ jobs:
                      modelscope_output/hf_owner_index_*.csv \
                      modelscope_output/PROGRESS.md
           git diff --cached --quiet || git commit -m "data: HF 画像断点与进度报告 $(date -u +%F-%H)"
-          git pull --rebase origin main || true
-          git push || echo "::warning::推送失败，下次运行重试"
+          # 5 job 并发 push 冲突处理：pull --rebase + 重试
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && break
+            echo "推送冲突，重试 $i/5..."
+            sleep 10
+            git add -f modelscope_output/state_hf_profiles_*.json \
+                       modelscope_output/hf_org_profiles_*.jsonl \
+                       modelscope_output/hf_user_profiles_*.jsonl \
+                       modelscope_output/hf_owner_index_*.csv \
+                       modelscope_output/PROGRESS.md
+            git diff --cached --quiet || git commit -m "data: HF 画像断点重试 $(date -u +%F-%H)"
+          done
 
       - uses: actions/upload-artifact@v4
         if: always()
