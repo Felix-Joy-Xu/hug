@@ -64,35 +64,74 @@ else:
 REQUEST_DELAY = 0.3
 SAVE_EVERY = 200
 WRITE_LOCK = threading.Lock()
-# 云端定期回写：每处理 COMMIT_EVERY 条就 git push 一次断点到仓库，防超时丢数据
-COMMIT_EVERY = 5000
+# 云端定期回写：每 CHECKPOINT_MINUTES 分钟生成进度报告并 git push 断点到仓库（防超时丢数据）
+CHECKPOINT_MINUTES = 30
 IS_GITHUB_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
 _last_commit_count = [0]
+_last_checkpoint_ts = [0.0]
 
 
-def checkpoint_commit():
-    """GitHub Actions 下定期回写断点到仓库（数据防丢）。"""
+def write_progress_report(state: dict, total: int, started_ts: float):
+    """生成自然语言可读的进度报告 markdown。"""
+    done = state.get("count", 0)
+    pct = done / total * 100 if total else 0
+    elapsed = time.time() - started_ts
+    rate = done / (elapsed / 60) if elapsed > 0 else 0  # 条/分钟
+    remain = (total - done) / rate if rate > 0 else 0   # 剩余分钟
+    shard_suffix = f"_{_shard}" if _shards > 1 else ""
+    report = OUTPUT_DIR / f"PROGRESS_shard{shard_suffix}.md"
+    lines = [
+        "# HuggingFace 组织/用户画像采集进度",
+        "",
+        f"- **更新时间**: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC",
+        f"- **分片**: {_shard}/{_shards}",
+        f"- **进度**: {done:,} / {total:,} 个 owner（{pct:.1f}%）",
+        f"- **组织数**: {state.get('orgs', 0):,}",
+        f"- **个人用户数**: {state.get('users', 0):,}",
+        f"- **失败数**: {state.get('errors', 0):,}",
+        f"- **采集速率**: {rate:.0f} 个/分钟",
+        f"- **已运行**: {elapsed/3600:.1f} 小时",
+        f"- **预计剩余**: {remain/60:.1f} 小时",
+        "",
+        "## 已采集",
+        "",
+        f"- 组织画像: {ORG_FILE.name}（{(ORG_FILE.stat().st_size/1024/1024) if ORG_FILE.exists() else 0:.1f} MB）",
+        f"- 个人画像: {USER_FILE.name}（{(USER_FILE.stat().st_size/1024/1024) if USER_FILE.exists() else 0:.1f} MB）",
+        f"- owner 汇总: {INDEX_FILE.name}",
+        "",
+        "> 本报告由爬虫每 30 分钟自动生成并提交。",
+    ]
+    with open(report, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return report
+
+
+def checkpoint_commit(state: dict, total: int, started_ts: float):
+    """GitHub Actions 下定期生成进度报告并回写断点到仓库（数据防丢）。"""
     if not IS_GITHUB_ACTIONS:
         return
     try:
         import subprocess
         git = "git"
+        report = write_progress_report(state, total, started_ts)
         shard_suffix = f"_{_shard}" if _shards > 1 else ""
         files = [
             str(OUTPUT_DIR / f"hf_org_profiles{shard_suffix}.jsonl"),
             str(OUTPUT_DIR / f"hf_user_profiles{shard_suffix}.jsonl"),
             str(OUTPUT_DIR / f"hf_owner_index{shard_suffix}.csv"),
             str(OUTPUT_DIR / f"state_hf_profiles{shard_suffix}.json"),
+            str(report),
         ]
         subprocess.run([git, "add", "-f"] + files, check=False, capture_output=True)
         subprocess.run([git, "config", "user.name", "github-actions[bot]"], check=False, capture_output=True)
         subprocess.run([git, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=False, capture_output=True)
-        r = subprocess.run([git, "commit", "-m", f"data: HF 画像断点 shard{_shard} {int(time.time())}"],
+        r = subprocess.run([git, "commit", "-m",
+                            f"data: HF 画像进度 shard{_shard} {done}/{total} {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"],
                            check=False, capture_output=True)
         if r.returncode == 0:
             subprocess.run([git, "pull", "--rebase", "origin", "main"], check=False, capture_output=True)
             p = subprocess.run([git, "push", "origin", "main"], check=False, capture_output=True)
-            print(f"[checkpoint] 回写断点成功（{_last_commit_count[0]} 条）", flush=True)
+            print(f"[checkpoint] 进度已提交并推送（{done}/{total}）", flush=True)
     except Exception as e:
         print(f"[checkpoint] 回写失败: {str(e)[:80]}", flush=True)
 
@@ -253,14 +292,17 @@ def main():
     _shards = args.shards
 
     if args.out_dir:
-        global OUTPUT_DIR, ORG_FILE, USER_FILE, INDEX_FILE, STATE_FILE
+        global OUTPUT_DIR
         OUTPUT_DIR = Path(args.out_dir)
         OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
-        suf = f"_{args.shard}" if args.shards > 1 else ""
-        ORG_FILE = OUTPUT_DIR / f"hf_org_profiles{suf}.jsonl"
-        USER_FILE = OUTPUT_DIR / f"hf_user_profiles{suf}.jsonl"
-        INDEX_FILE = OUTPUT_DIR / f"hf_owner_index{suf}.csv"
-        STATE_FILE = OUTPUT_DIR / f"state_hf_profiles{suf}.json"
+
+    # 输出文件始终带 shard 后缀（shards>1 时），保证多 job 互不冲突
+    global ORG_FILE, USER_FILE, INDEX_FILE, STATE_FILE
+    suf = f"_{args.shard}" if args.shards > 1 else ""
+    ORG_FILE = OUTPUT_DIR / f"hf_org_profiles{suf}.jsonl"
+    USER_FILE = OUTPUT_DIR / f"hf_user_profiles{suf}.jsonl"
+    INDEX_FILE = OUTPUT_DIR / f"hf_owner_index{suf}.csv"
+    STATE_FILE = OUTPUT_DIR / f"state_hf_profiles{suf}.json"
 
     list_path = Path(args.list_file)
     owners_all = extract_owners(list_path)
@@ -303,6 +345,8 @@ def main():
 
     done = 0
     workers = max(1, args.workers)
+    started_ts = time.time()
+    _last_checkpoint_ts[0] = started_ts
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for owner, record, owner_type in pool.map(process, todo):
             if record:
@@ -332,10 +376,10 @@ def main():
                 print(f"[progress] +{done}，累计 {len(completed)}/{len(owners)} "
                       f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})", flush=True)
 
-            # 云端定期回写断点（防超时丢数据）
-            if done - _last_commit_count[0] >= COMMIT_EVERY:
-                _last_commit_count[0] = done
-                checkpoint_commit()
+            # 云端每 30 分钟生成进度报告并回写断点（防超时丢数据）
+            if time.time() - _last_checkpoint_ts[0] >= CHECKPOINT_MINUTES * 60:
+                _last_checkpoint_ts[0] = time.time()
+                checkpoint_commit(state, len(owners), started_ts)
 
     index_f.flush()
     index_f.close()
@@ -345,6 +389,8 @@ def main():
     print(f"  组织画像: {ORG_FILE}", flush=True)
     print(f"  个人画像: {USER_FILE}", flush=True)
     print(f"  owner 汇总: {INDEX_FILE}", flush=True)
+    # 结束时提交最终进度报告
+    checkpoint_commit(state, len(owners), started_ts)
 
 
 if __name__ == "__main__":
