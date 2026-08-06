@@ -400,7 +400,7 @@ def main():
     started_ts = time.time()
     _last_checkpoint_ts[0] = started_ts
     # 时间上限：到点主动收尾退出（防云端 360 分钟超时取消丢数据）
-    max_minutes = int(os.environ.get("MAX_MINUTES", "0") or 0)
+    max_minutes = float(os.environ.get("MAX_MINUTES", "0") or 0)
     time_up = False
 
     def process(owner):
