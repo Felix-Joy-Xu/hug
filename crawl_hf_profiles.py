@@ -144,17 +144,52 @@ def write_progress_report(shards: int, started_ts: float, out_dir=None):
     return report
 
 
+def _git(cmd, cwd, timeout=60):
+    """带超时的 git 命令，返回 (returncode, stderr)。"""
+    import subprocess
+    try:
+        p = subprocess.run(cmd, capture_output=True, timeout=timeout, cwd=cwd)
+        return p.returncode, p.stderr.decode(errors="replace")
+    except subprocess.TimeoutExpired:
+        return -1, "timeout"
+    except Exception as e:
+        return -1, str(e)[:100]
+
+
 def checkpoint_commit(state: dict, total: int, started_ts: float):
-    """生成汇总进度报告并保存断点（git push 由 workflow 兜底步骤统一处理，避免并发冲突卡死）。"""
+    """每 30 分钟生成汇总进度报告并 push 到仓库（带超时与冲突容错，不阻塞采集）。"""
     if not IS_GITHUB_ACTIONS:
         return
     try:
+        cwd = str(BASE_DIR)
         report = write_progress_report(_shards, started_ts)
         shard_suffix = f"_{_shard}" if _shards > 1 else ""
-        for f in [STATE_FILE, ORG_FILE, USER_FILE, INDEX_FILE]:
-            if f.exists():
-                pass
-        print(f"[checkpoint] 断点已保存，PROGRESS.md 已更新（{state.get('count', 0)}/{total}）", flush=True)
+        files = [
+            str(STATE_FILE),
+            str(ORG_FILE),
+            str(USER_FILE),
+            str(INDEX_FILE),
+            str(report),
+        ]
+        files = [f for f in files if os.path.exists(f)]
+        # add（并发下其他 job 也在 add，失败无妨）
+        _git(["git", "add", "-f"] + files, cwd)
+        _git(["git", "config", "user.name", "github-actions[bot]"], cwd)
+        _git(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], cwd)
+        done = state.get("count", 0)
+        _git(["git", "commit", "-m",
+              f"data: HF 画像进度 shard{_shard} {done}/{total} {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"], cwd)
+        # pull --rebase（冲突则 abort），再 push（失败不报错，下轮重试）
+        rc, err = _git(["git", "pull", "--rebase", "origin", "main"], cwd, timeout=90)
+        if rc != 0:
+            _git(["git", "rebase", "--abort"], cwd)
+            print(f"[checkpoint] rebase 冲突已 abort，数据保留本地，下轮重试", flush=True)
+            return
+        rc, err = _git(["git", "push", "origin", "main"], cwd, timeout=90)
+        if rc == 0:
+            print(f"[checkpoint] 进度已推送（{done}/{total}），报告: {report.name}", flush=True)
+        else:
+            print(f"[checkpoint] push 失败（{err[:80]}），数据保留本地", flush=True)
     except Exception as e:
         print(f"[checkpoint] 失败: {str(e)[:80]}", flush=True)
 
