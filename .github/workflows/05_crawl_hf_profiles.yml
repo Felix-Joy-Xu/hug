@@ -96,24 +96,25 @@ jobs:
           cd ..
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f modelscope_output/state_hf_profiles_*.json \
-                     modelscope_output/hf_org_profiles_*.jsonl \
-                     modelscope_output/hf_user_profiles_*.jsonl \
-                     modelscope_output/hf_owner_index_*.csv \
-                     modelscope_output/PROGRESS.md
-          git diff --cached --quiet || git commit -m "data: HF 画像断点与进度报告 $(date -u +%F-%H)"
-          # 5 job 并发 push 冲突处理：pull --rebase + 重试
+          # 5 job 并发 push 冲突处理：pull --rebase（冲突则 abort 重来）+ 重试；push 失败不报错
           for i in 1 2 3 4 5; do
-            git pull --rebase origin main && git push && break
-            echo "推送冲突，重试 $i/5..."
-            sleep 10
             git add -f modelscope_output/state_hf_profiles_*.json \
                        modelscope_output/hf_org_profiles_*.jsonl \
                        modelscope_output/hf_user_profiles_*.jsonl \
                        modelscope_output/hf_owner_index_*.csv \
                        modelscope_output/PROGRESS.md
-            git diff --cached --quiet || git commit -m "data: HF 画像断点重试 $(date -u +%F-%H)"
-          done
+            git diff --cached --quiet || git commit -m "data: HF 画像断点与进度报告 $(date -u +%F-%H)"
+            if git pull --rebase origin main; then
+              if git push origin main; then
+                echo "推送成功"
+                break
+              fi
+            else
+              git rebase --abort 2>/dev/null || true
+              echo "rebase 冲突，abort 后重试 $i/5..."
+            fi
+            sleep 15
+          done || true
 
       - uses: actions/upload-artifact@v4
         if: always()
