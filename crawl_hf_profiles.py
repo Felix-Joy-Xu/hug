@@ -157,39 +157,13 @@ def _git(cmd, cwd, timeout=60):
 
 
 def checkpoint_commit(state: dict, total: int, started_ts: float):
-    """每 30 分钟生成汇总进度报告并 push 到仓库（带超时与冲突容错，不阻塞采集）。"""
+    """每 30 分钟生成汇总进度报告并保存断点（git push 由 workflow 后台守护进程负责，避免阻塞采集）。"""
     if not IS_GITHUB_ACTIONS:
         return
     try:
-        cwd = str(BASE_DIR)
         report = write_progress_report(_shards, started_ts)
-        shard_suffix = f"_{_shard}" if _shards > 1 else ""
-        files = [
-            str(STATE_FILE),
-            str(ORG_FILE),
-            str(USER_FILE),
-            str(INDEX_FILE),
-            str(report),
-        ]
-        files = [f for f in files if os.path.exists(f)]
-        # add（并发下其他 job 也在 add，失败无妨）
-        _git(["git", "add", "-f"] + files, cwd)
-        _git(["git", "config", "user.name", "github-actions[bot]"], cwd)
-        _git(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], cwd)
         done = state.get("count", 0)
-        _git(["git", "commit", "-m",
-              f"data: HF 画像进度 shard{_shard} {done}/{total} {time.strftime('%m-%d %H:%M', time.gmtime())} UTC"], cwd)
-        # pull --rebase（冲突则 abort），再 push（失败不报错，下轮重试）
-        rc, err = _git(["git", "pull", "--rebase", "origin", "main"], cwd, timeout=90)
-        if rc != 0:
-            _git(["git", "rebase", "--abort"], cwd)
-            print(f"[checkpoint] rebase 冲突已 abort，数据保留本地，下轮重试", flush=True)
-            return
-        rc, err = _git(["git", "push", "origin", "main"], cwd, timeout=90)
-        if rc == 0:
-            print(f"[checkpoint] 进度已推送（{done}/{total}），报告: {report.name}", flush=True)
-        else:
-            print(f"[checkpoint] push 失败（{err[:80]}），数据保留本地", flush=True)
+        print(f"[checkpoint] 断点与报告已更新（{done}/{total}），报告: {report.name}", flush=True)
     except Exception as e:
         print(f"[checkpoint] 失败: {str(e)[:80]}", flush=True)
 
