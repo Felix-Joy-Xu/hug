@@ -27,14 +27,14 @@ jobs:
             account: felixcu
             rps: 1.0
           - shard: 2
-            account: felixcu
-            rps: 1.0
+            account: citlalicutie
+            rps: 1.5
           - shard: 3
             account: citlalicutie
             rps: 1.5
           - shard: 4
-            account: citlalicutie
-            rps: 1.5
+            account: felix114
+            rps: 2.5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
