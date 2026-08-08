@@ -98,6 +98,7 @@ jobs:
           HF_BASE: https://huggingface.co
           HF_TOKENS: ${{ secrets.HF_TOKENS }}
           HF_TOKEN_INDEX: ${{ matrix.shard }}
+          HF_RPS: 0.5
           MAX_MINUTES: 120
 
       - uses: actions/upload-artifact@v4

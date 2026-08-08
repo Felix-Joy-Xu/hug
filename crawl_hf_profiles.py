@@ -233,9 +233,40 @@ def _get_token():
     return HF_TOKENS[idx]
 
 
+# ============================================================
+# 全局令牌桶限速：控制本 job 的请求速率，
+# 5 个 job 共享同一 HF 账号配额（200 req/min），
+# 每 job 限速 RPS_PER_JOB，避免 429 限流。
+# ============================================================
+class TokenBucket:
+    def __init__(self, rps: float):
+        self.capacity = max(1.0, rps)  # 桶容量至少 1
+        self.tokens = 1.0
+        self.rps = rps
+        self.last = time.time()
+        self.lock = threading.Lock()
+
+    def acquire(self):
+        while True:
+            with self.lock:
+                now = time.time()
+                self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rps)
+                self.last = now
+                if self.tokens >= 1:
+                    self.tokens -= 1
+                    return
+                wait = (1 - self.tokens) / self.rps
+            time.sleep(wait)
+
+
+RPS_PER_JOB = float(os.environ.get("HF_RPS", "0.67"))  # 默认 40 req/min/job
+_bucket = TokenBucket(RPS_PER_JOB)
+
+
 def fetch_json(session, url, retries=6):
     for attempt in range(retries):
         try:
+            _bucket.acquire()  # 全局限速
             headers = dict(session.headers)
             tok = _get_token()
             if tok:
