@@ -71,8 +71,9 @@ jobs:
                          modelscope_output/hf_owner_index_${{ matrix.shard }}.csv \
                          modelscope_output/PROGRESS.md
               git commit -m "data: HF 画像 shard${{ matrix.shard }} 进度 [skip ci]" 2>/dev/null || echo "无新数据可提交"
-              git pull --rebase origin main 2>/dev/null || git rebase --abort 2>/dev/null || true
-              git push origin main 2>/dev/null && echo "提交推送成功" || echo "推送冲突，下轮重试"
+              # 所有 git 网络操作加超时，失败快速跳过（5 job 并发冲突时下轮重试，不卡死）
+              timeout 60 git pull --rebase origin main 2>/dev/null || { git rebase --abort 2>/dev/null; echo "pull 超时/冲突，跳过"; }
+              timeout 60 git push origin main 2>/dev/null && echo "提交推送成功" || echo "推送冲突/超时，下轮重试"
             done
           ) &
           AUTO_COMMIT_PID=$!
@@ -92,8 +93,8 @@ jobs:
                      modelscope_output/hf_owner_index_${{ matrix.shard }}.csv \
                      modelscope_output/PROGRESS.md
           git commit -m "data: HF 画像 shard${{ matrix.shard }} 最终进度 [skip ci]" 2>/dev/null || echo "无新数据"
-          git pull --rebase origin main 2>/dev/null || git rebase --abort 2>/dev/null || true
-          git push origin main 2>/dev/null && echo "最终提交推送成功" || echo "最终推送冲突，下轮重试"
+          timeout 60 git pull --rebase origin main 2>/dev/null || { git rebase --abort 2>/dev/null; echo "pull 超时/冲突，跳过"; }
+          timeout 60 git push origin main 2>/dev/null && echo "最终提交推送成功" || echo "最终推送冲突，下轮重试"
         env:
           HF_BASE: https://huggingface.co
           HF_TOKENS: ${{ secrets.HF_TOKENS }}
