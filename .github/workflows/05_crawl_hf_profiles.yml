@@ -78,18 +78,18 @@ jobs:
 
       - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5）+ 后台 30 分钟自动提交
         run: |
-          # 带重试的提交函数：pull（成功才 push），最多 3 次快速尝试（5 job 并发时避免长时间竞争）
+          # 带重试的提交函数：pull（成功才 push），最多 2 次快速尝试（随机错峰已大幅降低碰撞）
           commit_and_push() {
-            for i in 1 2 3; do
+            for i in 1 2; do
               if timeout 60 git pull --rebase origin main 2>/dev/null; then
                 if timeout 60 git push origin main 2>/dev/null; then
                   echo "提交推送成功"
                   return 0
                 fi
-                echo "push 失败，重试 $i/3..."
+                echo "push 失败，重试 $i/2..."
               else
                 git rebase --abort 2>/dev/null || true
-                echo "pull 冲突/超时，abort 重试 $i/3..."
+                echo "pull 冲突/超时，abort 重试 $i/2..."
               fi
               sleep 5
             done
@@ -97,10 +97,10 @@ jobs:
             return 1
           }
 
-          # 后台守护进程：每 30 分钟自动 commit + push 已爬数据（按 shard 错峰避免并发竞争）
+          # 后台守护进程：每 30 分钟自动 commit + push（随机错峰 30-35 分钟，避免 5 job 同时竞争）
           (
             while true; do
-              sleep $((1800 + ${{ matrix.shard }} * 120))
+              sleep $((1800 + RANDOM % 300))
               echo "=== 每 30 分钟自动提交进度 ==="
               python update_progress.py
               git add -f modelscope_output/state_hf_profiles_${{ matrix.shard }}.json \
