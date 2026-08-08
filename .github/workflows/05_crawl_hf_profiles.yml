@@ -19,7 +19,22 @@ jobs:
     timeout-minutes: 360
     strategy:
       matrix:
-        shard: [0, 1, 2, 3, 4]
+        include:
+          - shard: 0
+            account: felixcu
+            rps: 1.0
+          - shard: 1
+            account: felixcu
+            rps: 1.0
+          - shard: 2
+            account: felixcu
+            rps: 1.0
+          - shard: 3
+            account: citlalicutie
+            rps: 1.5
+          - shard: 4
+            account: citlalicutie
+            rps: 1.5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -117,9 +132,9 @@ jobs:
           commit_and_push
         env:
           HF_BASE: https://huggingface.co
-          HF_TOKENS: ${{ secrets.HF_TOKENS }}
-          HF_TOKEN_INDEX: ${{ matrix.shard }}
-          HF_RPS: 0.5
+          HF_ACCOUNT: ${{ matrix.account }}
+          HF_TOKEN_INDEX: 0
+          HF_RPS: ${{ matrix.rps }}
           MAX_MINUTES: 300
 
       - uses: actions/upload-artifact@v4
