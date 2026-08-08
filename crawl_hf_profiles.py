@@ -233,7 +233,7 @@ def _get_token():
     return HF_TOKENS[idx]
 
 
-def fetch_json(session, url, retries=4):
+def fetch_json(session, url, retries=6):
     for attempt in range(retries):
         try:
             headers = dict(session.headers)
@@ -242,7 +242,10 @@ def fetch_json(session, url, retries=4):
                 headers["Authorization"] = f"Bearer {tok}"
             r = session.get(url, headers=headers, timeout=30)
             if r.status_code in (429, 503):
-                time.sleep(min(2 ** attempt * 3, 30))
+                # 按 Retry-After 头等待（限流核心应对）
+                ra = r.headers.get("Retry-After")
+                wait = int(ra) if ra and ra.isdigit() else min(2 ** attempt * 5, 60)
+                time.sleep(wait)
                 continue
             if r.status_code == 200:
                 return r.json(), 200
@@ -278,6 +281,11 @@ def fetch_profile(session, owner: str):
                 "meta": {k: data.get(k) for k in ORG_META_FIELDS},
             }, "org"
 
+    # 3. 返回错误类型（429=限流，404=用户/组织均不存在，其他）
+    if status in (429, 503):
+        return None, "ratelimit"
+    if status == 404:
+        return None, "notfound"
     return None, f"http{status}"
 
 
@@ -405,6 +413,9 @@ def main():
                     state["users"] += 1
             else:
                 state["errors"] += 1
+                err_type = owner_type if isinstance(owner_type, str) else str(owner_type)
+                state.setdefault("err_detail", {})
+                state["err_detail"][err_type] = state["err_detail"].get(err_type, 0) + 1
                 if state["errors"] <= 20:
                     print(f"  [{owner}] 抓取失败: {owner_type}", flush=True)
 

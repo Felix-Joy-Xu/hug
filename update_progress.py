@@ -20,6 +20,7 @@ lines = [
     "",
 ]
 done_total = org_total = user_total = err_total = all_total = 0
+err_detail_total = {}
 rows = []
 for i in range(SHARDS):
     f = os.path.join(OUT_DIR, f"state_hf_profiles_{i}.json")
@@ -31,6 +32,8 @@ for i in range(SHARDS):
         user_total += s.get("users", 0)
         err_total += s.get("errors", 0)
         all_total += s.get("total", 0)
+        for k, v in (s.get("err_detail") or {}).items():
+            err_detail_total[k] = err_detail_total.get(k, 0) + v
         rows.append(
             f"- 分片 {i}: {s.get('count', 0):,} / {s.get('total', 0):,}，"
             f"orgs={s.get('orgs', 0):,}，users={s.get('users', 0):,}，err={s.get('errors', 0):,}"
@@ -39,11 +42,12 @@ for i in range(SHARDS):
         rows.append(f"- 分片 {i}: 尚未开始")
 
 pct = done_total / all_total * 100 if all_total else 0
+err_summary = "，".join(f"{k}={v:,}" for k, v in sorted(err_detail_total.items())) if err_detail_total else "无"
 lines += [
     f"- **总体进度**: {done_total:,} / {all_total:,} 个 owner（{pct:.1f}%）",
     f"- **组织数**: {org_total:,}",
     f"- **个人用户数**: {user_total:,}",
-    f"- **失败数**: {err_total:,}",
+    f"- **失败数**: {err_total:,}（{err_summary}）",
     "",
     "## 各分片进度",
     "",
