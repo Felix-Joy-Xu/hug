@@ -240,8 +240,8 @@ def _get_token():
 # ============================================================
 class TokenBucket:
     def __init__(self, rps: float):
-        self.capacity = max(1.0, rps)  # 桶容量至少 1
-        self.tokens = 1.0
+        self.capacity = max(4.0, rps * 4)  # 允许小 burst（最多 4 个并发令牌）
+        self.tokens = self.capacity
         self.rps = rps
         self.last = time.time()
         self.lock = threading.Lock()
@@ -263,7 +263,7 @@ RPS_PER_JOB = float(os.environ.get("HF_RPS", "0.67"))  # 默认 40 req/min/job
 _bucket = TokenBucket(RPS_PER_JOB)
 
 
-def fetch_json(session, url, retries=6):
+def fetch_json(session, url, retries=2):
     for attempt in range(retries):
         try:
             _bucket.acquire()  # 全局限速
@@ -273,17 +273,17 @@ def fetch_json(session, url, retries=6):
                 headers["Authorization"] = f"Bearer {tok}"
             r = session.get(url, headers=headers, timeout=30)
             if r.status_code in (429, 503):
-                # 按 Retry-After 头等待（限流核心应对）
+                # 限流：不硬等，快速返回给主循环重试队列（避免拖死 job）
                 ra = r.headers.get("Retry-After")
-                wait = int(ra) if ra and ra.isdigit() else min(2 ** attempt * 5, 60)
-                time.sleep(wait)
+                wait = int(ra) if ra and ra.isdigit() else 30
+                time.sleep(min(wait, 10))  # 最多等 10s，然后交给重试队列
                 continue
             if r.status_code == 200:
                 return r.json(), 200
             return None, r.status_code
         except requests.RequestException:
             if attempt < retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2)
                 continue
             return None, -1
     return None, -1
@@ -422,56 +422,90 @@ def main():
             return owner, None, f"err:{type(e).__name__}"
         return owner, record, owner_type
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(process, o) for o in todo]
-        for fut in as_completed(futures):
-            if time_up:
-                fut.cancel()
-                continue
-            try:
-                owner, record, owner_type = fut.result()
-            except Exception:
-                continue
-            if record:
-                if owner_type == "org":
-                    append_jsonl(ORG_FILE, record)
-                else:
-                    append_jsonl(USER_FILE, record)
-                append_index(writer, record)
-                if owner_type == "org":
-                    state["orgs"] += 1
-                else:
-                    state["users"] += 1
-            else:
-                state["errors"] += 1
-                err_type = owner_type if isinstance(owner_type, str) else str(owner_type)
-                state.setdefault("err_detail", {})
-                state["err_detail"][err_type] = state["err_detail"].get(err_type, 0) + 1
-                if state["errors"] <= 20:
-                    print(f"  [{owner}] 抓取失败: {owner_type}", flush=True)
+    retry_pool = []  # 限流/网络失败待重试的 owner
 
+    def run_batch(batch, label):
+        """处理一批 owner，返回 (完成数, 待重试列表)。"""
+        nonlocal time_up
+        nonlocal_done = [0]
+        local_retry = []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(process, o) for o in batch]
+            for fut in as_completed(futures):
+                if time_up:
+                    continue
+                try:
+                    owner, record, owner_type = fut.result()
+                except Exception:
+                    continue
+                if record:
+                    if owner_type == "org":
+                        append_jsonl(ORG_FILE, record)
+                    else:
+                        append_jsonl(USER_FILE, record)
+                    append_index(writer, record)
+                    if owner_type == "org":
+                        state["orgs"] += 1
+                    else:
+                        state["users"] += 1
+                    completed.add(owner)
+                else:
+                    # 限流/网络失败 → 待重试；404 确认不存在 → 记失败
+                    if owner_type in ("ratelimit", "http-1", "err:Timeout", "err:ConnectionError") or str(owner_type).startswith("http"):
+                        local_retry.append(owner)
+                    else:
+                        state["errors"] += 1
+                        completed.add(owner)
+                        err_type = owner_type if isinstance(owner_type, str) else str(owner_type)
+                        state.setdefault("err_detail", {})
+                        state["err_detail"][err_type] = state["err_detail"].get(err_type, 0) + 1
+                        if state["errors"] <= 20:
+                            print(f"  [{owner}] 抓取失败: {owner_type}", flush=True)
+
+                state["count"] = len(completed)
+                state["completed"] = sorted(completed)
+                done = len(completed)
+                nonlocal_done[0] += 1
+
+                if done % SAVE_EVERY == 0:
+                    with WRITE_LOCK:
+                        index_f.flush()
+                        save_state(state)
+                    print(f"[progress] {label} +{nonlocal_done[0]}，累计 {len(completed)}/{len(owners)} "
+                          f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})", flush=True)
+
+                # 云端每 30 分钟生成进度报告并回写断点（防超时丢数据）
+                if time.time() - _last_checkpoint_ts[0] >= CHECKPOINT_MINUTES * 60:
+                    _last_checkpoint_ts[0] = time.time()
+                    checkpoint_commit(state, len(owners), started_ts)
+
+                # 时间上限：主动收尾
+                if max_minutes and (time.time() - started_ts) >= max_minutes * 60:
+                    time_up = True
+                    print(f"[main] 达到时间上限 {max_minutes} 分钟，主动收尾（已处理 {done}）", flush=True)
+                    break
+        return nonlocal_done[0], local_retry
+
+    # 主批次：全部 todo
+    done_count, retry_pool = run_batch(todo, "主批次")
+    print(f"[main] 主批次完成 {done_count}，待重试 {len(retry_pool)}", flush=True)
+
+    # 重试批次：限流/网络失败的 owner（配额恢复窗口内再试 2 轮）
+    for round_i in range(2):
+        if not retry_pool or time_up:
+            break
+        print(f"[main] 重试第 {round_i + 1} 轮：{len(retry_pool)} 个", flush=True)
+        time.sleep(30)  # 等配额恢复
+        done_count, retry_pool = run_batch(retry_pool, f"重试{round_i + 1}")
+
+    # 最终剩余的重试失败者记入 errors
+    for owner in retry_pool:
+        if owner not in completed:
+            state["errors"] += 1
+            state.setdefault("err_detail", {})
+            state["err_detail"]["unresolved"] = state["err_detail"].get("unresolved", 0) + 1
             completed.add(owner)
-            state["completed"] = sorted(completed)
-            state["count"] = len(completed)
-            done += 1
-
-            if done % SAVE_EVERY == 0:
-                with WRITE_LOCK:
-                    index_f.flush()
-                    save_state(state)
-                print(f"[progress] +{done}，累计 {len(completed)}/{len(owners)} "
-                      f"(orgs={state['orgs']}, users={state['users']}, err={state['errors']})", flush=True)
-
-            # 云端每 30 分钟生成进度报告并回写断点（防超时丢数据）
-            if time.time() - _last_checkpoint_ts[0] >= CHECKPOINT_MINUTES * 60:
-                _last_checkpoint_ts[0] = time.time()
-                checkpoint_commit(state, len(owners), started_ts)
-
-            # 时间上限：主动收尾（保存断点并正常退出，job 标记成功）
-            if max_minutes and (time.time() - started_ts) >= max_minutes * 60:
-                time_up = True
-                print(f"[main] 达到时间上限 {max_minutes} 分钟，主动收尾（已处理 {done}）", flush=True)
-                break
+    state["count"] = len(completed)
 
     index_f.flush()
     index_f.close()
