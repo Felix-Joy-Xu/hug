@@ -132,6 +132,7 @@ jobs:
           commit_and_push
         env:
           HF_BASE: https://huggingface.co
+          HF_ACCOUNT_TOKENS: ${{ secrets.HF_ACCOUNT_TOKENS }}
           HF_ACCOUNT: ${{ matrix.account }}
           HF_TOKEN_INDEX: 0
           HF_RPS: ${{ matrix.rps }}
