@@ -479,49 +479,36 @@ def _get_token():
 # ============================================================
 
 class TokenBucket:
-
     def __init__(self, rps: float):
-
-        self.capacity = max(4.0, rps * 4)  # 允许小 burst（最多 4 个并发令牌）
-
+        self.base_rps = rps
+        self.capacity = max(4.0, rps * 4)
         self.tokens = self.capacity
-
         self.rps = rps
-
         self.last = time.time()
-
         self.lock = threading.Lock()
-
-
-
+        self.success_streak = 0
     def acquire(self):
-
         while True:
-
             with self.lock:
-
                 now = time.time()
-
                 self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rps)
-
                 self.last = now
-
                 if self.tokens >= 1:
-
                     self.tokens -= 1
-
                     return
-
                 wait = (1 - self.tokens) / self.rps
-
             time.sleep(wait)
-
-
-
-
-
-RPS_PER_JOB = float(os.environ.get("HF_RPS", "0.67"))  # 默认 40 req/min/job
-
+    def on_success(self):
+        with self.lock:
+            self.success_streak += 1
+            if self.success_streak >= 20 and self.rps < self.base_rps * 1.2:
+                self.rps = min(self.base_rps * 1.2, self.rps + 0.02)
+                self.success_streak = 0
+    def on_rate_limited(self):
+        with self.lock:
+            self.success_streak = 0
+            self.rps = max(self.base_rps * 0.4, self.rps * 0.7)
+RPS_PER_JOB = float(os.environ.get("HF_RPS", "0.6"))
 _bucket = TokenBucket(RPS_PER_JOB)
 
 
@@ -547,6 +534,7 @@ def fetch_json(session, url, retries=2):
             r = session.get(url, headers=headers, timeout=30)
 
             if r.status_code in (429, 503):
+                _bucket.on_rate_limited()
 
                 # 限流：不硬等，快速返回给主循环重试队列（避免拖死 job）
 
@@ -559,7 +547,7 @@ def fetch_json(session, url, retries=2):
                 continue
 
             if r.status_code == 200:
-
+                _bucket.on_success()
                 return r.json(), 200
 
             return None, r.status_code
