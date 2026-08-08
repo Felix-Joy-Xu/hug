@@ -78,20 +78,20 @@ jobs:
 
       - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5）+ 后台 30 分钟自动提交
         run: |
-          # 带重试的提交函数：pull（成功才 push），最多 2 次快速尝试（随机错峰已大幅降低碰撞）
+          # 带重试的提交函数：pull（成功才 push），最多 8 次（随机错峰 + 快速重试覆盖碰撞）
           commit_and_push() {
-            for i in 1 2; do
+            for i in 1 2 3 4 5 6 7 8; do
               if timeout 60 git pull --rebase origin main 2>/dev/null; then
                 if timeout 60 git push origin main 2>/dev/null; then
                   echo "提交推送成功"
                   return 0
                 fi
-                echo "push 失败，重试 $i/2..."
+                echo "push 失败，重试 $i/8..."
               else
                 git rebase --abort 2>/dev/null || true
-                echo "pull 冲突/超时，abort 重试 $i/2..."
+                echo "pull 冲突/超时，abort 重试 $i/8..."
               fi
-              sleep 5
+              sleep 8
             done
             echo "推送失败，下轮重试"
             return 1
