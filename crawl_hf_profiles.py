@@ -886,13 +886,20 @@ def main():
                 owner = pending.pop(fut)
 
                 try:
-
                     owner, record, owner_type = fut.result()
-
                 except Exception:
-
+                    # 意外异常：owner 加入待重试（不丢失）
+                    local_retry.append(owner)
+                    state["count"] = len(completed)
+                    state["completed"] = sorted(completed)
+                    done = len(completed)
+                    nonlocal_done[0] += 1
+                    try:
+                        o = next(it)
+                        pending[pool.submit(process, o)] = o
+                    except StopIteration:
+                        pass
                     continue
-
                 if record:
 
                     if owner_type == "org":
@@ -1007,15 +1014,14 @@ def main():
     # 重试批次：限流/网络失败的 owner（配额恢复窗口内再试 2 轮）
 
     for round_i in range(2):
-
         if not retry_pool or time_up:
-
             break
-
         print(f"[main] 重试第 {round_i + 1} 轮：{len(retry_pool)} 个", flush=True)
-
+        # 时间不足则跳过重试（避免无谓等待）
+        if max_minutes and (time.time() - started_ts) >= (max_minutes - 2) * 60:
+            print("[main] 时间不足，跳过重试", flush=True)
+            break
         time.sleep(30)  # 等配额恢复
-
         done_count, retry_pool = run_batch(retry_pool, f"重试{round_i + 1}")
 
 
