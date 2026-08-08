@@ -400,6 +400,10 @@ def load_state():
 
 def save_state(state: dict):
 
+    if isinstance(state.get("completed"), list):
+
+        state["completed"] = sorted(state["completed"])
+
     with open(STATE_FILE, "w", encoding="utf-8") as f:
 
         json.dump(state, f, ensure_ascii=False, indent=1)
@@ -536,18 +540,9 @@ def fetch_json(session, url, retries=2):
             r = session.get(url, headers=headers, timeout=30)
 
             if r.status_code in (429, 503):
+                # 限流：直接返回，交主循环重试队列（避免重试白费配额）
                 _bucket.on_rate_limited()
-
-                # 限流：不硬等，快速返回给主循环重试队列（避免拖死 job）
-
-                ra = r.headers.get("Retry-After")
-
-                wait = int(ra) if ra and ra.isdigit() else 30
-
-                time.sleep(min(wait, 10))  # 最多等 10s，然后交给重试队列
-
-                continue
-
+                return None, "ratelimit"
             if r.status_code == 200:
                 _bucket.on_success()
                 return r.json(), 200
@@ -616,9 +611,8 @@ def fetch_profile(session, owner: str):
 
 
 
-    # 3. 返回错误类型（429=限流，404=用户/组织均不存在，其他）
-
-    if status in (429, 503):
+        # 3. 返回错误类型（429=限流，404=用户/组织均不存在，其他）
+    if status in (429, 503) or status == "ratelimit":
 
         return None, "ratelimit"
 
@@ -881,7 +875,6 @@ def main():
                     # 意外异常：owner 加入待重试（不丢失）
                     local_retry.append(owner)
                     state["count"] = len(completed)
-                    state["completed"] = sorted(completed)
                     done = len(completed)
                     nonlocal_done[0] += 1
                     try:
@@ -939,8 +932,6 @@ def main():
 
 
                 state["count"] = len(completed)
-
-                state["completed"] = sorted(completed)
 
                 done = len(completed)
 
