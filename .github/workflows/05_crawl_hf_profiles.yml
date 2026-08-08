@@ -114,7 +114,7 @@ jobs:
           ) &
           AUTO_COMMIT_PID=$!
 
-          # 主采集（每轮 2 小时主动收尾保存断点）
+          # 主采集（MAX_MINUTES=290 主动收尾，留时间给最终 push）
           python crawl_hf_profiles.py \
             --list-file modelscope_output/hf_models_all.jsonl \
             --workers 8 \
@@ -136,7 +136,7 @@ jobs:
           HF_ACCOUNT: ${{ matrix.account }}
           HF_TOKEN_INDEX: 0
           HF_RPS: ${{ matrix.rps }}
-          MAX_MINUTES: 300
+          MAX_MINUTES: 290
 
       - uses: actions/upload-artifact@v4
         if: always()
