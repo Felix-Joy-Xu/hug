@@ -59,6 +59,24 @@ jobs:
 
       - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5）+ 后台 30 分钟自动提交
         run: |
+          # 带重试的提交函数：pull（成功才 push），最多 6 次，总时长约 3 分钟
+          commit_and_push() {
+            for i in 1 2 3 4 5 6; do
+              if timeout 90 git pull --rebase origin main 2>/dev/null; then
+                if timeout 90 git push origin main 2>/dev/null; then
+                  echo "提交推送成功"
+                  return 0
+                fi
+              else
+                git rebase --abort 2>/dev/null || true
+                echo "pull 冲突，abort 重试 $i/6..."
+              fi
+              sleep 10
+            done
+            echo "推送多次失败，下轮重试"
+            return 1
+          }
+
           # 后台守护进程：每 30 分钟自动 commit + push 已爬数据（借鉴 crawler 仓库模式）
           (
             while true; do
@@ -71,9 +89,7 @@ jobs:
                          modelscope_output/hf_owner_index_${{ matrix.shard }}.csv \
                          modelscope_output/PROGRESS.md
               git commit -m "data: HF 画像 shard${{ matrix.shard }} 进度 [skip ci]" 2>/dev/null || echo "无新数据可提交"
-              # 所有 git 网络操作加超时，失败快速跳过（5 job 并发冲突时下轮重试，不卡死）
-              timeout 60 git pull --rebase origin main 2>/dev/null || { git rebase --abort 2>/dev/null; echo "pull 超时/冲突，跳过"; }
-              timeout 60 git push origin main 2>/dev/null && echo "提交推送成功" || echo "推送冲突/超时，下轮重试"
+              commit_and_push
             done
           ) &
           AUTO_COMMIT_PID=$!
@@ -93,8 +109,7 @@ jobs:
                      modelscope_output/hf_owner_index_${{ matrix.shard }}.csv \
                      modelscope_output/PROGRESS.md
           git commit -m "data: HF 画像 shard${{ matrix.shard }} 最终进度 [skip ci]" 2>/dev/null || echo "无新数据"
-          timeout 60 git pull --rebase origin main 2>/dev/null || { git rebase --abort 2>/dev/null; echo "pull 超时/冲突，跳过"; }
-          timeout 60 git push origin main 2>/dev/null && echo "最终提交推送成功" || echo "最终推送冲突，下轮重试"
+          commit_and_push
         env:
           HF_BASE: https://huggingface.co
           HF_TOKENS: ${{ secrets.HF_TOKENS }}
