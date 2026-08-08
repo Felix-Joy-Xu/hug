@@ -3,7 +3,7 @@ name: 05 - HF 组织/用户画像
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */3 * * *"   # 每 3 小时自动触发一轮（断点续爬，多轮累计）
+    - cron: "0 */6 * * *"   # 每 6 小时自动触发一轮（MAX_MINUTES=300 跑满 5 小时，断点续爬）
 
 permissions:
   actions: read
