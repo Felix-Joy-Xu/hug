@@ -9,6 +9,10 @@ permissions:
   actions: read
   contents: write
 
+concurrency:
+  group: hf-profiles
+  cancel-in-progress: true
+
 jobs:
   profiles:
     runs-on: ubuntu-latest
@@ -59,19 +63,20 @@ jobs:
 
       - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5）+ 后台 30 分钟自动提交
         run: |
-          # 带重试的提交函数：pull（成功才 push），最多 6 次，总时长约 3 分钟
+          # 带重试的提交函数：pull（成功才 push），最多 8 次，超时更长防并发排队
           commit_and_push() {
-            for i in 1 2 3 4 5 6; do
-              if timeout 90 git pull --rebase origin main 2>/dev/null; then
-                if timeout 90 git push origin main 2>/dev/null; then
+            for i in 1 2 3 4 5 6 7 8; do
+              if timeout 180 git pull --rebase origin main 2>/dev/null; then
+                if timeout 180 git push origin main 2>/dev/null; then
                   echo "提交推送成功"
                   return 0
                 fi
+                echo "push 失败，重试 $i/8..."
               else
                 git rebase --abort 2>/dev/null || true
-                echo "pull 冲突，abort 重试 $i/6..."
+                echo "pull 冲突/超时，abort 重试 $i/8..."
               fi
-              sleep 10
+              sleep 15
             done
             echo "推送多次失败，下轮重试"
             return 1
@@ -115,7 +120,7 @@ jobs:
           HF_TOKENS: ${{ secrets.HF_TOKENS }}
           HF_TOKEN_INDEX: ${{ matrix.shard }}
           HF_RPS: 0.5
-          MAX_MINUTES: 120
+          MAX_MINUTES: 300
 
       - uses: actions/upload-artifact@v4
         if: always()
