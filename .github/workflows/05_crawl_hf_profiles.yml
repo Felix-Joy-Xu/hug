@@ -83,28 +83,23 @@ jobs:
 
       - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5）+ 后台 30 分钟自动提交
         run: |
-          # 带重试的提交函数：pull 冲突时 abort 回到 main（数据文件保留本地），重新生成报告后重试 push
+          # 带重试的提交函数：pull（成功才 push），最多 8 次；冲突/超时 abort 回 main
           commit_and_push() {
             for i in 1 2 3 4 5 6 7 8; do
               git diff --cached --quiet || git commit -m "data: HF 画像进度合并 [skip ci]" 2>/dev/null || true
-              if timeout 60 git pull --rebase origin main 2>/dev/null; then
-                if timeout 60 git push origin main 2>/dev/null; then
+              if timeout 120 git pull --rebase origin main 2>/dev/null; then
+                if timeout 120 git push origin main 2>/dev/null; then
                   echo "提交推送成功"
                   return 0
                 fi
                 echo "push 失败，重试 $i/8..."
               else
-                # 冲突处理：abort 回到 main（避免 detached HEAD），数据文件保留本地
+                # 冲突/超时：abort 回 main（避免 detached HEAD），数据文件保留本地
                 git rebase --abort 2>/dev/null || true
                 git checkout main 2>/dev/null || true
-                if [ "${{ matrix.shard }}" = "0" ]; then
-                  python update_progress.py
-                  git add -f modelscope_output/PROGRESS.md
-                  git diff --cached --quiet || git commit -m "docs: PROGRESS.md 重试汇总 [skip ci]" 2>/dev/null || true
-                fi
-                echo "pull 冲突已处理（abort 回 main），重试 $i/8..."
+                echo "pull 冲突/超时已处理（abort 回 main），重试 $i/8..."
               fi
-              sleep 8
+              sleep 10
             done
             echo "推送失败，下轮重试"
             return 1
@@ -127,8 +122,9 @@ jobs:
             --shards 5 \
             --shard ${{ matrix.shard }}
 
-          # 采集结束，停止后台守护并做最终提交（只有 shard0 提交 PROGRESS.md，避免 5 job 冲突）
+          # 采集结束，停止后台守护并做最终提交（错峰 sleep 避免 5 job 同时 git 操作；只有 shard0 提交 PROGRESS.md）
           kill $AUTO_COMMIT_PID 2>/dev/null || true
+          sleep $(( ${{ matrix.shard }} * 15 ))
           git add -f modelscope_output/state_hf_profiles_${{ matrix.shard }}.json \
                      modelscope_output/hf_org_profiles_${{ matrix.shard }}.jsonl \
                      modelscope_output/hf_user_profiles_${{ matrix.shard }}.jsonl \
@@ -136,7 +132,7 @@ jobs:
           git commit -m "data: HF 画像 shard${{ matrix.shard }} 最终进度 [skip ci]" 2>/dev/null || echo "无新数据"
           if [ "${{ matrix.shard }}" = "0" ]; then
             # 只有 shard0 负责汇总报告：pull 拿其他 job 数据 → 生成完整 PROGRESS.md → 提交
-            timeout 60 git pull --rebase origin main 2>/dev/null || {
+            timeout 120 git pull --rebase origin main 2>/dev/null || {
               git rebase --abort 2>/dev/null || true
               git checkout main 2>/dev/null || true
               echo "pull 冲突，abort 回 main，重新生成报告"
