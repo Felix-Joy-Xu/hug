@@ -176,8 +176,11 @@ jobs:
         run: |
           mkdir -p modelscope_output
           for d in /tmp/shard/hf-profiles-shard*; do
-            cp "$d"/* modelscope_output/ 2>/dev/null || true
+            echo "=== $d ==="
+            ls -la "$d"/
+            cp -r "$d"/* modelscope_output/ || echo "cp $d 失败"
           done
+          echo "=== modelscope_output/ ==="
           ls -la modelscope_output/
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -187,11 +190,13 @@ jobs:
           git diff --cached --quiet || git commit -m "data: HF 画像全 shard 汇总 $(date -u +%F-%H:%M) [skip ci]"
           # 统一 push（单 job 无并发冲突）
           for i in 1 2 3 4 5; do
-            if timeout 120 git pull --rebase origin main 2>/dev/null; then
-              if timeout 120 git push origin main 2>/dev/null; then
+            if timeout 120 git pull --rebase origin main 2>&1; then
+              if timeout 120 git push origin main 2>&1; then
                 echo "全部数据推送成功"
                 exit 0
               fi
+            else
+              echo "pull 失败: $?"
             fi
             git rebase --abort 2>/dev/null || true
             git checkout main 2>/dev/null || true
