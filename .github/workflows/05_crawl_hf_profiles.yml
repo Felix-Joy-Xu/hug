@@ -108,8 +108,8 @@ jobs:
               fi
               sleep 10
             done
-            echo "推送失败，下轮重试"
-            return 1
+            echo "推送多次失败（数据已在 artifact 兜底），不报错避免 run failure"
+            return 0
           }
 
           # 后台守护进程：每 30 分钟只记录状态（不生成 PROGRESS.md，避免 unstaged changes 干扰最终提交）
