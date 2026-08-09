@@ -83,11 +83,11 @@ jobs:
 
       - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5）+ 后台 30 分钟自动提交
         run: |
-          # 带重试的提交函数：pull（成功才 push），最多 8 次（只操作已暂存内容，避免竞态）
+          # 带重试的提交函数：pull -X theirs（PROGRESS.md 冲突取远程，数据文件不冲突），成功才 push
           commit_and_push() {
             for i in 1 2 3 4 5 6 7 8; do
               git diff --cached --quiet || git commit -m "data: HF 画像进度合并 [skip ci]" 2>/dev/null || true
-              if timeout 60 git pull --rebase origin main 2>/dev/null; then
+              if timeout 60 git pull --rebase -X theirs origin main 2>/dev/null; then
                 if timeout 60 git push origin main 2>/dev/null; then
                   echo "提交推送成功"
                   return 0
@@ -120,14 +120,18 @@ jobs:
             --shards 5 \
             --shard ${{ matrix.shard }}
 
-          # 采集结束，停止后台守护并做最终提交（只 add 本 shard 文件，避免竞态）
+          # 采集结束，停止后台守护并做最终提交（pull 后重新生成 PROGRESS.md 汇总全部 shard）
           kill $AUTO_COMMIT_PID 2>/dev/null || true
           git add -f modelscope_output/state_hf_profiles_${{ matrix.shard }}.json \
                      modelscope_output/hf_org_profiles_${{ matrix.shard }}.jsonl \
                      modelscope_output/hf_user_profiles_${{ matrix.shard }}.jsonl \
-                     modelscope_output/hf_owner_index_${{ matrix.shard }}.csv \
-                     modelscope_output/PROGRESS.md
+                     modelscope_output/hf_owner_index_${{ matrix.shard }}.csv
           git commit -m "data: HF 画像 shard${{ matrix.shard }} 最终进度 [skip ci]" 2>/dev/null || echo "无新数据"
+          # pull 拿其他 job 的数据（-X theirs 解决 PROGRESS.md 冲突），重新生成完整报告再提交
+          timeout 60 git pull --rebase -X theirs origin main 2>/dev/null || git rebase --abort 2>/dev/null || true
+          python update_progress.py
+          git add -f modelscope_output/PROGRESS.md
+          git commit -m "docs: PROGRESS.md 汇总 [skip ci]" 2>/dev/null || echo "报告无变化"
           commit_and_push
         env:
           HF_BASE: https://huggingface.co
