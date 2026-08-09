@@ -35,10 +35,10 @@ jobs:
             account: citlalicutie
             rps: 1.5
           - shard: 3
-            account: citlalicutie
-            rps: 1.5
-          - shard: 4
             account: felix114
+            rps: 2.5
+          - shard: 4
+            account: hateypu
             rps: 2.5
     steps:
       - uses: actions/checkout@v4
