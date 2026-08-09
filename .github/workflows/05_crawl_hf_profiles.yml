@@ -128,26 +128,14 @@ jobs:
             --shards 5 \
             --shard ${{ matrix.shard }}
 
-          # 采集结束，停止后台守护并做最终提交（错峰 sleep 避免 5 job 同时 git 操作；只有 shard0 提交 PROGRESS.md）
+          # 采集结束，停止后台守护并做本地提交（不 push——由独立 commit job 统一推送，避免 5 job 并发 git 冲突）
           kill $AUTO_COMMIT_PID 2>/dev/null || true
-          sleep $(( ${{ matrix.shard }} * 15 ))
+          sleep $(( ${{ matrix.shard }} * 5 ))
           git add -f modelscope_output/state_hf_profiles_${{ matrix.shard }}.json \
                      modelscope_output/hf_org_profiles_${{ matrix.shard }}.jsonl \
                      modelscope_output/hf_user_profiles_${{ matrix.shard }}.jsonl \
                      modelscope_output/hf_owner_index_${{ matrix.shard }}.csv
           git commit -m "data: HF 画像 shard${{ matrix.shard }} 最终进度 [skip ci]" 2>/dev/null || echo "无新数据"
-          if [ "${{ matrix.shard }}" = "0" ]; then
-            # 只有 shard0 负责汇总报告：pull 拿其他 job 数据 → 生成完整 PROGRESS.md → 提交
-            timeout 120 git pull --rebase origin main 2>/dev/null || {
-              git rebase --abort 2>/dev/null || true
-              git checkout main 2>/dev/null || true
-              echo "pull 冲突，abort 回 main，重新生成报告"
-            }
-            python update_progress.py
-            git add -f modelscope_output/PROGRESS.md
-            git commit -m "docs: PROGRESS.md 汇总 [skip ci]" 2>/dev/null || echo "报告无变化"
-          fi
-          commit_and_push
         env:
           HF_BASE: https://huggingface.co
           HF_ACCOUNT_TOKENS: ${{ secrets.HF_ACCOUNT_TOKENS }}
@@ -166,3 +154,48 @@ jobs:
             modelscope_output/hf_owner_index_${{ matrix.shard }}.csv
             modelscope_output/state_hf_profiles_${{ matrix.shard }}.json
           retention-days: 30
+
+  commit-data:
+    runs-on: ubuntu-latest
+    needs: profiles
+    timeout-minutes: 60
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 下载所有 shard 数据并统一提交
+        run: |
+          mkdir -p modelscope_output
+          for i in 0 1 2 3 4; do
+            gh run download "${{ github.run_id }}" --repo ${{ github.repository }} \
+              --name hf-profiles-shard$i --dir /tmp/shard$i 2>/dev/null || true
+            if [ -d /tmp/shard$i/hf-profiles-shard$i ]; then
+              cp /tmp/shard$i/hf-profiles-shard$i/* modelscope_output/ 2>/dev/null || true
+            fi
+          done
+          ls -la modelscope_output/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # 生成汇总报告（读全部 state）
+          python update_progress.py
+          git add -f modelscope_output/
+          git diff --cached --quiet || git commit -m "data: HF 画像全 shard 汇总 $(date -u +%F-%H:%M) [skip ci]"
+          # 统一 push（单 job 无并发冲突）
+          for i in 1 2 3 4 5; do
+            if timeout 120 git pull --rebase origin main 2>/dev/null; then
+              if timeout 120 git push origin main 2>/dev/null; then
+                echo "全部数据推送成功"
+                exit 0
+              fi
+            fi
+            git rebase --abort 2>/dev/null || true
+            git checkout main 2>/dev/null || true
+            sleep 10
+          done
+          echo "推送失败（数据在 artifact）"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHARDS: 5
