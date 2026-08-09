@@ -83,19 +83,22 @@ jobs:
 
       - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5）+ 后台 30 分钟自动提交
         run: |
-          # 带重试的提交函数：pull -X theirs（PROGRESS.md 冲突取远程，数据文件不冲突），成功才 push
+          # 带重试的提交函数：pull 冲突时只对 PROGRESS.md 取 theirs（state 数据文件保留本地），成功才 push
           commit_and_push() {
             for i in 1 2 3 4 5 6 7 8; do
               git diff --cached --quiet || git commit -m "data: HF 画像进度合并 [skip ci]" 2>/dev/null || true
-              if timeout 60 git pull --rebase -X theirs origin main 2>/dev/null; then
+              if timeout 60 git pull --rebase origin main 2>/dev/null; then
                 if timeout 60 git push origin main 2>/dev/null; then
                   echo "提交推送成功"
                   return 0
                 fi
                 echo "push 失败，重试 $i/8..."
               else
-                git rebase --abort 2>/dev/null || true
-                echo "pull 冲突/超时，abort 重试 $i/8..."
+                # 冲突解决：PROGRESS.md 取 theirs（报告），state/数据文件保留本地（不覆盖）
+                git checkout --theirs modelscope_output/PROGRESS.md 2>/dev/null || true
+                git add modelscope_output/PROGRESS.md 2>/dev/null || true
+                git -c core.editor=true rebase --continue 2>/dev/null || git rebase --abort 2>/dev/null || true
+                echo "pull 冲突已处理，重试 $i/8..."
               fi
               sleep 8
             done
@@ -127,8 +130,12 @@ jobs:
                      modelscope_output/hf_user_profiles_${{ matrix.shard }}.jsonl \
                      modelscope_output/hf_owner_index_${{ matrix.shard }}.csv
           git commit -m "data: HF 画像 shard${{ matrix.shard }} 最终进度 [skip ci]" 2>/dev/null || echo "无新数据"
-          # pull 拿其他 job 的数据（-X theirs 解决 PROGRESS.md 冲突），重新生成完整报告再提交
-          timeout 60 git pull --rebase -X theirs origin main 2>/dev/null || git rebase --abort 2>/dev/null || true
+          # pull 拿其他 job 的数据（冲突时 PROGRESS.md 取 theirs，state 数据保留），重新生成完整报告再提交
+          timeout 60 git pull --rebase origin main 2>/dev/null || {
+            git checkout --theirs modelscope_output/PROGRESS.md 2>/dev/null || true
+            git add modelscope_output/PROGRESS.md 2>/dev/null || true
+            git -c core.editor=true rebase --continue 2>/dev/null || git rebase --abort 2>/dev/null || true
+          }
           python update_progress.py
           git add -f modelscope_output/PROGRESS.md
           git commit -m "docs: PROGRESS.md 汇总 [skip ci]" 2>/dev/null || echo "报告无变化"
