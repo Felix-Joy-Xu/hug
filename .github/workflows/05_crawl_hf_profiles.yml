@@ -83,10 +83,16 @@ jobs:
 
       - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5）+ 后台 30 分钟自动提交
         run: |
-          # 带重试的提交函数：先暂存全部改动（避免 pull 因 unstaged changes 拒绝），pull 成功才 push
+          # 带重试的提交函数：先暂存本 shard 数据（避免 pull 因 unstaged changes 拒绝），pull 成功才 push
           commit_and_push() {
             for i in 1 2 3 4 5 6 7 8; do
-              git add -A 2>/dev/null
+              git add -f modelscope_output/state_hf_profiles_${{ matrix.shard }}.json \
+                         modelscope_output/hf_org_profiles_${{ matrix.shard }}.jsonl \
+                         modelscope_output/hf_user_profiles_${{ matrix.shard }}.jsonl \
+                         modelscope_output/hf_owner_index_${{ matrix.shard }}.csv
+              if [ "${{ matrix.shard }}" = "0" ]; then
+                git add -f modelscope_output/PROGRESS.md
+              fi
               git diff --cached --quiet || git commit -m "data: HF 画像进度合并 [skip ci]" 2>/dev/null || true
               if timeout 120 git pull --rebase origin main 2>/dev/null; then
                 if timeout 120 git push origin main 2>/dev/null; then
