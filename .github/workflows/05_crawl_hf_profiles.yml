@@ -166,15 +166,17 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: 下载所有 shard 数据并统一提交
+      - name: 下载所有 shard artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/shard
+          pattern: hf-profiles-shard*
+
+      - name: 合并数据并统一提交
         run: |
           mkdir -p modelscope_output
-          for i in 0 1 2 3 4; do
-            gh run download "${{ github.run_id }}" --repo ${{ github.repository }} \
-              --name hf-profiles-shard$i --dir /tmp/shard$i 2>/dev/null || true
-            if [ -d /tmp/shard$i/hf-profiles-shard$i ]; then
-              cp /tmp/shard$i/hf-profiles-shard$i/* modelscope_output/ 2>/dev/null || true
-            fi
+          for d in /tmp/shard/hf-profiles-shard*; do
+            cp "$d"/* modelscope_output/ 2>/dev/null || true
           done
           ls -la modelscope_output/
           git config user.name "github-actions[bot]"
@@ -197,5 +199,4 @@ jobs:
           done
           echo "推送失败（数据在 artifact）"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SHARDS: 5
