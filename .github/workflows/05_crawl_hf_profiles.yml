@@ -83,12 +83,13 @@ jobs:
 
       - name: 采集组织/用户画像（片 ${{ matrix.shard }}/5）+ 后台 30 分钟自动提交
         run: |
-          # 带重试的提交函数：pull（成功才 push），最多 8 次；冲突/超时 abort 回 main
+          # 带重试的提交函数：先暂存全部改动（避免 pull 因 unstaged changes 拒绝），pull 成功才 push
           commit_and_push() {
             for i in 1 2 3 4 5 6 7 8; do
+              git add -A 2>/dev/null
               git diff --cached --quiet || git commit -m "data: HF 画像进度合并 [skip ci]" 2>/dev/null || true
-              if timeout 120 git pull --rebase origin main; then
-                if timeout 120 git push origin main; then
+              if timeout 120 git pull --rebase origin main 2>/dev/null; then
+                if timeout 120 git push origin main 2>/dev/null; then
                   echo "提交推送成功"
                   return 0
                 fi
@@ -105,12 +106,11 @@ jobs:
             return 1
           }
 
-          # 后台守护进程：每 30 分钟更新本地 PROGRESS.md（git push 由 job 结束时的最终提交统一处理，避免 5 job 并发 git 竞争）
+          # 后台守护进程：每 30 分钟只记录状态（不生成 PROGRESS.md，避免 unstaged changes 干扰最终提交）
           (
             while true; do
               sleep $((1800 + RANDOM % 300))
-              echo "=== 每 30 分钟更新进度报告 ==="
-              python update_progress.py
+              echo "=== 每 30 分钟守护进程心跳 ==="
             done
           ) &
           AUTO_COMMIT_PID=$!
