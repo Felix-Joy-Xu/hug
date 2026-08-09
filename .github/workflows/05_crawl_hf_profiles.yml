@@ -2,8 +2,13 @@ name: 05 - HF 组织/用户画像
 
 on:
   workflow_dispatch:
+    inputs:
+      max_minutes:
+        description: '本轮运行分钟数（测试用短值，默认 290）'
+        required: false
+        default: '290'
   schedule:
-    - cron: "0 */6 * * *"   # 每 6 小时自动触发一轮（MAX_MINUTES=300 跑满 5 小时，断点续爬）
+    - cron: "0 */6 * * *"   # 每 6 小时自动触发一轮（MAX_MINUTES=290 跑满约 5 小时，断点续爬）
 
 permissions:
   actions: read
@@ -130,7 +135,7 @@ jobs:
           HF_ACCOUNT: ${{ matrix.account }}
           HF_TOKEN_INDEX: 0
           HF_RPS: ${{ matrix.rps }}
-          MAX_MINUTES: 290
+          MAX_MINUTES: ${{ inputs.max_minutes || '290' }}
 
       - uses: actions/upload-artifact@v4
         if: always()
