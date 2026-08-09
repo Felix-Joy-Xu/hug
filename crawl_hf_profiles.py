@@ -204,10 +204,8 @@ def write_progress_report(shards: int, started_ts: float, out_dir=None):
 
     pct = done_total / all_total * 100 if all_total else 0
 
-    elapsed = time.time() - started_ts
-
+    elapsed = max(time.time() - started_ts, 300)  # 最小 5 分钟窗口，避免启动初期速率失真
     rate = done_total / (elapsed / 60) if elapsed > 0 else 0
-
     remain = (all_total - done_total) / rate if rate > 0 else 0
 
 
@@ -399,14 +397,21 @@ def load_state():
 
 
 def save_state(state: dict):
-
     if isinstance(state.get("completed"), list):
-
         state["completed"] = sorted(state["completed"])
-
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-
-        json.dump(state, f, ensure_ascii=False, indent=1)
+    # 原子写：先写临时文件再 rename，避免守护进程读到半写文件（count/completed 不一致）
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=str(STATE_FILE.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, STATE_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 
@@ -949,9 +954,8 @@ def main():
                 if done % SAVE_EVERY == 0:
 
                     with WRITE_LOCK:
-
                         index_f.flush()
-
+                        state["completed"] = sorted(completed)
                         save_state(state)
 
                     print(f"[progress] {label} +{nonlocal_done[0]}，累计 {len(completed)}/{len(owners)} "
@@ -1026,9 +1030,8 @@ def main():
 
 
     index_f.flush()
-
     index_f.close()
-
+    state["completed"] = sorted(completed)
     save_state(state)
 
     print(f"[done] 累计 {len(completed)}/{len(owners)} "
