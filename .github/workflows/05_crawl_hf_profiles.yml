@@ -27,18 +27,18 @@ jobs:
         include:
           - shard: 0
             account: felixcu
-            rps: 1.0
+            rps: 2.5
           - shard: 1
-            account: felixcu
-            rps: 1.0
-          - shard: 2
             account: citlalicutie
-            rps: 1.5
-          - shard: 3
+            rps: 2.5
+          - shard: 2
             account: felix114
             rps: 2.5
-          - shard: 4
+          - shard: 3
             account: hateypu
+            rps: 2.5
+          - shard: 4
+            account: floiraaaaa
             rps: 2.5
     steps:
       - uses: actions/checkout@v4
