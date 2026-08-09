@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: hf-profiles
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   profiles:
