@@ -632,56 +632,38 @@ def fetch_profile(session, owner: str):
 
 
 def append_jsonl(path: Path, record: dict):
-
-    with open(path, "a", encoding="utf-8") as f:
-
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    # 线程锁：8 并发写同一文件必须串行，否则部分写入丢失
+    with WRITE_LOCK:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 
 
 
 def append_index(writer, record: dict):
-
-    meta = record.get("meta", {})
-
-    row = {
-
-        "name": record.get("name"),
-
-        "type": record.get("type"),
-
-        "fullname": meta.get("fullname", ""),
-
-        "plan": meta.get("plan", ""),
-
-        "isPro": meta.get("isPro", ""),
-
-        "isVerified": meta.get("isVerified", ""),
-
-        "numModels": meta.get("numModels", ""),
-
-        "numDatasets": meta.get("numDatasets", ""),
-
-        "numSpaces": meta.get("numSpaces", ""),
-
-        "numFollowers": meta.get("numFollowers", ""),
-
-        "numLikes": meta.get("numLikes", ""),
-
-        "numDiscussions": meta.get("numDiscussions", ""),
-
-        "numPapers": meta.get("numPapers", ""),
-
-        "numUsers": meta.get("numUsers", ""),
-
-        "createdAt": meta.get("createdAt", ""),
-
-        "crawled_at": record.get("crawled_at", ""),
-
-    }
-
-    writer.writerow({k: row.get(k, "") for k in INDEX_FIELDS})
+    # 线程锁：csv writer 非线程安全，8 并发必须串行
+    with WRITE_LOCK:
+        meta = record.get("meta", {})
+        row = {
+            "name": record.get("name"),
+            "type": record.get("type"),
+            "fullname": meta.get("fullname", ""),
+            "plan": meta.get("plan", ""),
+            "isPro": meta.get("isPro", ""),
+            "isVerified": meta.get("isVerified", ""),
+            "numModels": meta.get("numModels", ""),
+            "numDatasets": meta.get("numDatasets", ""),
+            "numSpaces": meta.get("numSpaces", ""),
+            "numFollowers": meta.get("numFollowers", ""),
+            "numLikes": meta.get("numLikes", ""),
+            "numDiscussions": meta.get("numDiscussions", ""),
+            "numPapers": meta.get("numPapers", ""),
+            "numUsers": meta.get("numUsers", ""),
+            "createdAt": meta.get("createdAt", ""),
+            "crawled_at": record.get("crawled_at", ""),
+        }
+        writer.writerow({k: row.get(k, "") for k in INDEX_FIELDS})
 
 
 
