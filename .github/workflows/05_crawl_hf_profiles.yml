@@ -7,6 +7,10 @@ on:
         description: '本轮运行分钟数（测试用短值，默认 290）'
         required: false
         default: '290'
+      redo:
+        description: '是否清空断点全量重爬（true/false）'
+        required: false
+        default: 'false'
   schedule:
     - cron: "0 */6 * * *"   # 每 6 小时自动触发一轮（MAX_MINUTES=290 跑满约 5 小时，断点续爬）
 
@@ -55,7 +59,13 @@ jobs:
       - name: 恢复上次断点（仓库里）
         run: |
           mkdir -p modelscope_output
-          if [ -f modelscope_output/state_hf_profiles_${{ matrix.shard }}.json ]; then
+          if [ "${{ inputs.redo }}" = "true" ]; then
+            echo "=== 全量重爬模式：清空断点与旧画像 ==="
+            rm -f modelscope_output/state_hf_profiles_${{ matrix.shard }}.json \
+                  modelscope_output/hf_org_profiles_${{ matrix.shard }}.jsonl \
+                  modelscope_output/hf_user_profiles_${{ matrix.shard }}.jsonl \
+                  modelscope_output/hf_owner_index_${{ matrix.shard }}.csv
+          elif [ -f modelscope_output/state_hf_profiles_${{ matrix.shard }}.json ]; then
             echo "恢复断点，继续上次采集"
           else
             echo "首次运行（或断点缺失），全新采集"
