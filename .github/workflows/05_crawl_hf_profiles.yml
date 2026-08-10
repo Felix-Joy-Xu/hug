@@ -182,6 +182,8 @@ jobs:
         with:
           path: /tmp/shard
           pattern: hf-profiles-shard*
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.run_id }}
 
       - name: 合并数据并通过 API 统一提交（绕开 git push protection）
         run: |
