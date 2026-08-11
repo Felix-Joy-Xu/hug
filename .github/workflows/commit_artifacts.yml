@@ -1,0 +1,26 @@
+name: commit-artifacts
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "artifact run id (redo run)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.run_id }}
+          path: artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 打包压缩并提交
+        run: python .github/scripts/pack_and_commit.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: Felix-Joy-Xu/hug
